@@ -20,11 +20,16 @@ import (
 var trayIcon []byte
 
 // runTrayOrWait shows a Windows system tray icon (ct-2026-07-10-2312, F3) —
-// menu "Abrir dashboard" / "Salir" — and blocks until shutdown. Two ways
-// out, both converging on the same graceful-shutdown path main() already
+// menu "Abrir dashboard" / "Salir" — and blocks until shutdown. Three ways
+// out, all converging on the same graceful-shutdown path main() already
 // has: "Salir" calls stop() (identical to Ctrl+C); ctx.Done() firing
 // externally (Ctrl+C) calls systray.Quit() so the icon never lingers after
-// the rest of the process starts tearing down.
+// the rest of the process starts tearing down; and Windows itself
+// (shutdown, logoff, or a taskkill without /F) sends WM_CLOSE/WM_ENDSESSION,
+// which fyne.io/systray's own wndProc turns into a call to onExit below
+// (ct-2026-08-07) — before this, that third path reached systray and
+// stopped there, never calling stop(), so the process could outlive its
+// own tray icon.
 //
 // fyne.io/systray is CGO-free on Windows (syscall + golang.org/x/sys/windows
 // only — verified with an explicit CGO_ENABLED=0 build before adding this
@@ -54,7 +59,7 @@ func runTrayOrWait(ctx context.Context, stop context.CancelFunc, dashboardURL st
 				}
 			}
 		}()
-	}, func() {})
+	}, func() { stop() })
 }
 
 // openAppWindow launches url as a chromeless "app window" — msedge first

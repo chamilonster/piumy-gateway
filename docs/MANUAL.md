@@ -4662,6 +4662,14 @@ es un paso aparte, conjunto con el boss (no en `main.go`).
     único archivo cgo es `systray_darwin.go`, nunca compilado acá).
     "Salir" y `ctx.Done()` externo (Ctrl+C) convergen al mismo `stop()` +
     `systray.Quit()` — un solo camino de shutdown, no dos.
+    **`onExit` (ct-2026-08-07):** el segundo callback de `systray.Run`
+    también llama a `stop()` — Windows lo dispara solo, sin pasar por
+    "Salir" ni por Ctrl+C: `WM_CLOSE`/`WM_ENDSESSION` (apagado del sistema,
+    o un `taskkill` sin `/F`) llegan hasta `fyne.io/systray`
+    (`systray_windows.go`, `WM_DESTROY` → fallthrough → `WM_ENDSESSION` →
+    `runSystrayExit()`), y antes de este fix ese camino no cerraba nada del
+    lado de Piumy — `stop()` es idempotente, así que converger acá también
+    no pisa los otros dos.
     "Abrir dashboard" → `openAppWindow`: `msedge --app=<url>` → fallback
     `chrome --app=<url>` → fallback final `cmd /c start <url>` (browser
     default, ya no chromeless pero nunca falla en silencio).

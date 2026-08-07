@@ -479,7 +479,7 @@ begin
   begin
     Log('Piumy: ' + SourceLabel + ' existente — claves encontradas: MCP=' + BoolStr(HasMcp) +
       ' REST=' + BoolStr(HasRest) + ' BACKUP=' + BoolStr(HasBackup));
-    Result := 'Piumy: ya existe una instalación (' + SourceLabel + ') pero no se pudieron reconocer todas sus claves — el archivo puede estar dañado o truncado. La instalación se detiene para no generar claves nuevas que reemplacen las que ya protegen tus backups. Revisá el archivo a mano, o si de verdad querés claves nuevas, borrá ' + SourceLabel + ' antes de reinstalar.';
+    Result := 'Piumy: ya existe una instalación (' + SourceLabel + ') pero no se pudieron reconocer todas sus claves — el archivo puede estar dañado o truncado. La instalación se detiene para no generar claves nuevas que reemplacen las que ya protegen sus backups. Revise el archivo a mano, o si de verdad quiere claves nuevas, borre ' + SourceLabel + ' antes de reinstalar.';
     Exit;
   end;
   Log('Piumy: PIUMY_MCP_KEY reusada de ' + SourceLabel + '.');
@@ -531,12 +531,12 @@ begin
   begin
     if not LoadStringFromFile(ConfigPath, RawBytes) then
     begin
-      Result := 'Piumy: ya existe una instalación (piumy-config.json) pero no se pudo leer ese archivo — ¿está bloqueado por otro programa, o sin permisos? La instalación se detiene para no arriesgar las claves existentes. Cerrá lo que lo esté usando y volvé a intentar.';
+      Result := 'Piumy: ya existe una instalación (piumy-config.json) pero no se pudo leer ese archivo — ¿está bloqueado por otro programa, o sin permisos? La instalación se detiene para no arriesgar las claves existentes. Cierre lo que lo esté usando y vuelva a intentar.';
       Exit;
     end;
     if HasBOM(RawBytes) then
     begin
-      Result := 'Piumy: piumy-config.json existe pero está guardado en un formato distinto al esperado (Unicode/UTF-16, o UTF-8 con marca de orden de bytes). La instalación se detiene para no generar claves nuevas que reemplacen las que ya protegen tus backups. Volvé a guardarlo en UTF-8/ANSI, o si de verdad querés claves nuevas, borrá piumy-config.json antes de reinstalar.';
+      Result := 'Piumy: piumy-config.json existe pero está guardado en un formato distinto al esperado (Unicode/UTF-16, o UTF-8 con marca de orden de bytes). La instalación se detiene para no generar claves nuevas que reemplacen las que ya protegen sus backups. Vuelva a guardarlo en UTF-8/ANSI, o si de verdad quiere claves nuevas, borre piumy-config.json antes de reinstalar.';
       Exit;
     end;
     Content := RawBytes;
@@ -553,12 +553,12 @@ begin
   begin
     if not LoadStringFromFile(BatPath, RawBytes) then
     begin
-      Result := 'Piumy: ya existe una instalación (run-piumy.bat) pero no se pudo leer ese archivo — ¿está bloqueado por otro programa, o sin permisos? La instalación se detiene para no arriesgar las claves existentes. Cerrá lo que lo esté usando y volvé a intentar.';
+      Result := 'Piumy: ya existe una instalación (run-piumy.bat) pero no se pudo leer ese archivo — ¿está bloqueado por otro programa, o sin permisos? La instalación se detiene para no arriesgar las claves existentes. Cierre lo que lo esté usando y vuelva a intentar.';
       Exit;
     end;
     if HasBOM(RawBytes) then
     begin
-      Result := 'Piumy: run-piumy.bat existe pero está guardado en un formato distinto al esperado (Unicode/UTF-16, o UTF-8 con marca de orden de bytes) — esto pasa si se lo abrió en el Bloc de notas y se guardó eligiendo "Unicode" en vez de "ANSI". La instalación se detiene para no generar claves nuevas que reemplacen las que ya protegen tus backups. Volvé a guardar el archivo como texto ANSI, o si de verdad querés claves nuevas, borrá run-piumy.bat antes de reinstalar.';
+      Result := 'Piumy: run-piumy.bat existe pero está guardado en un formato distinto al esperado (Unicode/UTF-16, o UTF-8 con marca de orden de bytes) — esto pasa si se lo abrió en el Bloc de notas y se guardó eligiendo "Unicode" en vez de "ANSI". La instalación se detiene para no generar claves nuevas que reemplacen las que ya protegen sus backups. Vuelva a guardar el archivo como texto ANSI, o si de verdad quiere claves nuevas, borre run-piumy.bat antes de reinstalar.';
       Exit;
     end;
 
@@ -674,7 +674,7 @@ begin
       Exit;
     Sleep(500);
   end;
-  Result := 'Piumy: había una instalación de Piumy corriendo (' + ImageName + ') y no se pudo cerrar automáticamente. Cerrala a mano (ícono junto al reloj, clic derecho, Salir) y volvé a ejecutar el instalador.';
+  Result := 'Piumy: había una instalación de Piumy corriendo (' + ImageName + ') y no se pudo cerrar automáticamente. Ciérrela a mano (ícono junto al reloj, clic derecho, Salir) y vuelva a ejecutar el instalador.';
 end;
 
 { PrepareToInstall corre DESPUÉS de "Listo para instalar" (el usuario ya
@@ -847,11 +847,11 @@ begin
 
   PasswordPage := CreateInputQueryPage(wpSelectDir,
     'Clave del tablero',
-    'Elige la clave para administrar Piumy',
-    'Con esta clave vas a entrar al tablero (reglas, mensajes, quién es el dueño). Se pide una sola vez, ahora — después se cambia desde el propio tablero.' + #13#10 + #13#10 +
-    'El código de recuperación llega a tu WhatsApp. Si además configuras el envío de correos desde el tablero, también te llega por correo — el campo de abajo es opcional, puedes dejarlo vacío y seguir.');
+    'Elija la clave para administrar Piumy',
+    'Con esta clave va a entrar al tablero (reglas, mensajes, quién es el dueño). Se pide una sola vez, ahora — después se cambia desde el propio tablero.' + #13#10 + #13#10 +
+    'El código de recuperación llega a su WhatsApp. Si además configura el envío de correos desde el tablero, también le llega por correo — el campo de abajo es opcional, puede dejarlo vacío y seguir.');
   PasswordPage.Add('Clave:', True);
-  PasswordPage.Add('Repite la clave:', True);
+  PasswordPage.Add('Repita la clave:', True);
   PasswordPage.Add('Correo de recuperación de contraseña:', False);
 end;
 
@@ -894,7 +894,7 @@ begin
     SilentPassword := ExpandConstant('{param:DASHBOARDPASSWORD|}');
     if SilentPassword = '' then
     begin
-      Log('Piumy: instalación silenciosa sin /DASHBOARDPASSWORD — queda con la clave de fábrica (admin/piumy). Cambiala desde el tablero apenas puedas.');
+      Log('Piumy: instalación silenciosa sin /DASHBOARDPASSWORD — queda con la clave de fábrica (admin/piumy). Cámbiela desde el tablero apenas pueda.');
       SilentPassword := 'piumy';
     end
     else if Length(SilentPassword) < 4 then
@@ -914,7 +914,7 @@ begin
   end
   else if PasswordPage.Values[0] <> PasswordPage.Values[1] then
   begin
-    MsgBox('Las dos claves que escribiste no coinciden.', mbError, MB_OK);
+    MsgBox('Las dos claves que escribió no coinciden.', mbError, MB_OK);
     Result := False;
   end;
 end;
@@ -968,9 +968,9 @@ begin
   if not Exec(ExpandConstant('{app}\{#MyAppExeName}'), '', ExpandConstant('{app}'),
      SW_HIDE, ewNoWait, ResultCode) then
   begin
-    Log('Piumy: no se pudo arrancar Piumy.exe automáticamente tras instalar — probablemente un antivirus o SmartScreen bloqueando el ejecutable. Las claves ya quedaron guardadas en run-piumy.bat; abrí la app desde el acceso directo cuando puedas.');
+    Log('Piumy: no se pudo arrancar Piumy.exe automáticamente tras instalar — probablemente un antivirus o SmartScreen bloqueando el ejecutable. Las claves ya quedaron guardadas en run-piumy.bat; abra la app desde el acceso directo cuando pueda.');
     if not WizardSilent then
-      MsgBox('Piumy se instaló, pero no pude arrancarlo automáticamente. Ábrelo desde el acceso directo.', mbError, MB_OK);
+      MsgBox('Piumy se instaló, pero no pude arrancarlo automáticamente. Ábralo desde el acceso directo.', mbError, MB_OK);
   end;
 
   { Limpieza defensiva — el hijo ya se llevó su propia copia del entorno
@@ -1081,7 +1081,7 @@ begin
       if not WizardSilent then
         MsgBox('Piumy se instaló, pero no se pudo crear su archivo de configuración (piumy-config.json) — un antivirus puede estar bloqueándolo.' + #13#10 + #13#10 +
           'La aplicación NO se inició automáticamente a propósito, para no generar datos que después no se puedan leer.' + #13#10 + #13#10 +
-          'Revisá el antivirus y volvé a ejecutar este instalador.', mbError, MB_OK);
+          'Revise el antivirus y vuelva a ejecutar este instalador.', mbError, MB_OK);
       Exit;
     end;
 
@@ -1116,10 +1116,10 @@ begin
         quien sí ve el diálogo. Un retiro desatendido de varias máquinas
         nunca pierde datos por un click que nadie dio. }
       if UninstallSilent then
-        Log('Piumy: desinstalación silenciosa — los datos (' + SecretsPath + ') NO se borran (mismo default que el diálogo interactivo). Borrá esa carpeta a mano si de verdad querés borrar todo.')
+        Log('Piumy: desinstalación silenciosa — los datos (' + SecretsPath + ') NO se borran (mismo default que el diálogo interactivo). Borre esa carpeta a mano si de verdad quiere borrar todo.')
       else if MsgBox('Piumy se va a desinstalar.' + #13#10 + #13#10 +
         '¿Borrar también los datos (' + SecretsPath + ')? Ahí vive el historial de mensajes, las reglas configuradas y la sesión de WhatsApp.' + #13#10 + #13#10 +
-        'Si no estás seguro, elige que NO — el programa se desinstala igual, y puedes borrar esa carpeta a mano más adelante.',
+        'Si no está seguro, elija que NO — el programa se desinstala igual, y puede borrar esa carpeta a mano más adelante.',
         mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
         DelTree(SecretsPath, True, True, True);
     end;

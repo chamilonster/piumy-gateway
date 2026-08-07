@@ -6,6 +6,36 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.8 — sin desplegar
+
+### Fixed
+- **`onExit` del tray no cerraba nada** (ct-2026-08-07). El segundo callback
+  de `systray.Run` en `tray_windows.go` estaba vacío — `WM_CLOSE`/
+  `WM_ENDSESSION` (apagado de Windows, o un cierre externo sin `/F`) llegan
+  hasta `fyne.io/systray` y de ahí no pasaban a ningún lado: el proceso de
+  Piumy podía seguir corriendo después de que el ícono de bandeja
+  desapareciera. Ahora `onExit` llama a `stop()`, el mismo `CancelFunc` que
+  ya usan "Salir" y `ctx.Done()` (idempotente, sin caminos nuevos).
+  Verificado con una instancia de prueba propia (nunca la de producción):
+  `taskkill` sin `/F` → cierre ordenado completo (`"piumy-gateway shutting
+  down"` seguido de `"piumy-gateway stopped"`) en ~600ms.
+- **Voseo en los textos de error del instalador** (ct-2026-08-07). Los
+  mensajes que `installer/windows/piumy.iss` le muestra al usuario final
+  (`Result`/`Log`/`MsgBox` de claves existentes ilegibles, instancia
+  corriendo sin poder cerrarse, clave repetida que no coincide, fallo al
+  crear `piumy-config.json`, desinstalación) estaban en voseo rioplatense
+  (`Cerrá`, `volvé`, `borrá`, `querés`, `Cerrala`, `Ábrelo`...) — Piumy se
+  publica a terceros de cualquier país hispanohablante. Pasados a
+  tratamiento de **usted**, mismo contenido, sin reescribir nada. La
+  página de la clave del tablero (`CreateInputQueryPage`) tenía el mismo
+  problema pero en tuteo (`Elige`, `vas a entrar`, `tu WhatsApp`,
+  `puedes`, `Repite`) — una pasada anterior las había sacado del voseo
+  sin llegar a usted; corregido también. `WizardForm.WelcomeLabel1/2` NO
+  se tocaron: el comentario que las precede las marca como texto verbatim
+  del boss.
+
+---
+
 ## 0.1.7 — 2026-08-07
 
 ### Fixed
@@ -40,6 +70,127 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
   exit 0; modo interactivo — ningún diálogo aparece (confirmado por título
   de ventana, va directo al wizard normal); camino de falla — exit code
   distinto de cero confirmado forzando el chequeo de verificación.
+- **T33 — actuar sobre otro chat dejaba el mensaje del dueño sin cerrar**
+  (`ct-2026-08-06-1526`, caso real en vivo: el boss ordenó por WhatsApp
+  escribirle a un tercer número, cambiarle las reglas y anotarle
+  memoria/contexto — su propio mensaje le llegó dos veces).
+  `send_message`/`draft` marcaban `MarkHandledBefore(to, ...)` — solo el
+  chat DESTINO. Cuando el despacho que se está atendiendo es un chat
+  distinto del destino, ese despacho nunca se marcaba, quedaba pendiente
+  y el sweep lo re-despachaba con un nonce nuevo. `silent_act` nunca tuvo
+  este bug (no tiene `to`, siempre marca el chat del despacho).
+  - **No es un bug nuevo de T31** — corrección registrada en
+    `docs/T33-DIAGRAMA-CERRAR-DESPACHO-OTRO-CHAT.md`: los bypasses de
+    terminal-principal y despacho-boss en `levelGateMiddleware` ya
+    permitían apuntar a otro chat antes de T31; T31 solo volvió eso el
+    caso cotidiano, no lo creó.
+  - Recorrido completo antes de codear (grep exhaustivo de
+    `gate.Consume`/`MarkHandledBefore`, 4 call sites en todo
+    `internal/mcpserver`): `approve_draft` verificado sano (marca el
+    chat del borrador, nunca toca el turno propio, a propósito).
+    Ninguna otra tool (`set_chat_rules`, `set_chat_memory`,
+    `set_chat_context`, `set_chat_status`, `set_chat_active`,
+    `set_mode`, `escalate`, `claim_chat`, `release_chat`,
+    `mark_handled`, `resolve_chat`) toca el turno — nunca lo tocó. Si el
+    turno entero de un agente es una de estas, el despacho queda
+    atado-sin-consumir hasta `DispatchStaleAfter` (15 min) — y el
+    **terminal entero** queda bloqueado ese tiempo, no solo ese chat.
+    Decisión (con Citrino): no cerrar automático ahí — arreglado por
+    skill, no por código.
+  - Fix: `markDispatchChatIfDifferent` (`send.go`), un helper compartido
+    entre los 3 call sites reales — cierra también el chat del despacho
+    activo cuando difiere del destino, usando `active.BurstMaxTS` (nunca
+    `now`, no marca de más). No-op en el caso de siempre (mismo chat).
+  - Skill del operador (`internal/mcpserver/manuals/operator/SKILL.md`)
+    corregida: tres afirmaciones que el código no respaldaba (una
+    contradecía a otra línea del mismo documento — mismo patrón que el
+    cifrado de T28), más la instrucción explícita del costo real de no
+    cerrar un turno puramente administrativo.
+  - Tests: `TestSendMessageToAnotherChatAlsoClosesDispatchChat`/
+    `TestDraftToAnotherChatAlsoClosesDispatchChat` (confirmados que
+    fallan sin el fix, antes de darlos por buenos),
+    `TestSendMessageToAnotherChatDoesNotMarkDispatchMessagesAfterBurst`,
+    `TestSendMessageSameChatDoesNotDoubleMark`.
+- **T19 — el freno de emergencia ya sobrevive un reinicio**
+  (`ct-2026-08-05-1249`, descubierto probando la instancia con sesión
+  real — T10). `governor.SetKill`/`state.Muted` vivían solo en memoria:
+  un reinicio (corte de luz, un update, un crash — no hipotético, le
+  pasó al PC del boss: hibernó y el gateway se cayó) soltaba el freno en
+  silencio. Si en ese momento estaba frenado por una razón real, el
+  gateway volvía mandando exactamente cuando menos había que hacerlo.
+  - `set_kill_switch` (MCP y `POST /api/admin/kill`) ahora también
+    persiste a `store.SettingKillSwitch`, ANTES de aplicar el efecto en
+    vivo — best-effort, logueado, nunca bloquea el freno en sí por un
+    problema de disco.
+  - `main.go`'s `restoreKillSwitch` (nuevo) relee esa marca al arrancar y
+    aplica **las dos mitades juntas** (`governor.SetKill(true)` +
+    `state.SetMuted(true)`) — llamado justo después de que existen
+    `gov`/`sm`, muchísimo antes de `ctrl.Start()` (el único call que
+    puede hacer que el pipeline mande algo). El orden es la parte que
+    importaba: si arranca mandando y recién después lee el ajuste, ya
+    salió lo que no debía.
+  - El tablero ya mostraba el freno puesto en vivo (badge "⛔ kill" +
+    carita en mood `muted`) — con el freno restaurado correctamente
+    desde el arranque, esos mismos indicadores ahora también reflejan un
+    freno que sobrevivió un reinicio, sin UI nueva.
+  - Verificado con el binario real: `store` sembrado con el freno puesto,
+    reinicio, `GET /api/status` confirmado devolviendo
+    `governor_killed: true` / `muted: true` desde el primer poll.
+  - Tests: `main_test.go` (`TestRestoreKillSwitch*`, la restauración en
+    sí) + `corepipeline/outbox_test.go`'s
+    `TestKillSwitchSurvivesRestartAndReallyBlocksSending` — la prueba
+    explícitamente pedida de que un freno restaurado bloquea un envío
+    REAL, no solo que las banderas queden en `true`. Extendidos también
+    `TestSetKillSwitchFlipsGovernorAndState` (mcpserver) y
+    `TestSetKillSwitchEndpoint` (restapi) para cubrir la persistencia.
+- **T18** (`ct-2026-08-05-1243`, el boss: su bandeja mezclaba ~1351 chats —
+  gente que le escribió junto a números que solo aparecieron en un grupo)
+  — `store.ChatOrigin` solo miraba mensajes ENTRANTES
+  (`from_me=0`): un chat que el dueño inició y nadie contestó caía en
+  `group_discovered`/`synced_contact` en vez de `inbound_spoke`, aunque
+  sea una conversación real. Reproducido con 3 casos concretos antes de
+  codear. Fix: reusa `realMessageSQL` (misma constante que
+  `ChatJIDsWithMessages` ya usa) sin filtro de dirección — de paso quedó
+  excluido el ruido de protocolo (recibos/reacciones sin texto ni tipo)
+  que la consulta original tampoco filtraba. El valor `"inbound_spoke"` se
+  mantuvo sin renombrar (viaja por `list_chats`/`get_chat`/
+  `decision-policy.md`) — se ajustaron esas 3 descripciones para decir lo
+  que el criterio significa de verdad, y remiten a `last_speaker` para
+  "me toca responder".
+  - `chatOut.Origin` expuesto en `GET /api/chats` — ya se calculaba en
+    cada `ListChats` (`enrichChat`) y se descontaba antes de esto.
+  - La pestaña Chats del tablero filtra por `origin === "inbound_spoke"`
+    (`app.js#isRealConversation`) en vez de `has_messages`.
+  - **Hallazgo sin resolver, flagueado a Citrino:** `chat_groups` (la
+    tabla que lee `group_discovered`) no tiene ningún escritor en código
+    de producción — solo tests. El sync real de grupos escribe
+    `group_members` (tabla hermana) a propósito, nunca `chat_groups`.
+    `group_discovered` no dispara hoy en producción, y `get_chat_groups`
+    (MCP) siempre devuelve vacío. La implementación paralela por
+    `group_members` que oculta números-solo-de-grupo en `handleChats`
+    quedó SIN TOCAR — es la única de las dos que funciona hoy; borrarla
+    antes de resolver `chat_groups` habría sido peor que dejarla.
+  - `docs/T18-DIAGRAMA-SEPARAR-POR-ORIGEN.md` con el detalle completo;
+    `docs/MANUAL.md` documenta el hallazgo de `chat_groups` y distingue
+    los tres conceptos de "origen" que conviven en el código (pedido de
+    Citrino).
+- **T17 Parte 1** (`ct-2026-08-05-1240`, el boss mandó capturas: la
+  cabecera decía "(sin nombre)" sobre un número real) — `recordOwnIdentity`
+  pisaba `state.OwnName` SIN CONDICIÓN en cada reconexión; cuando
+  `client.Store.PushName` volvía vacío (confirmado contra la librería
+  whatsmeow: esa mutación de appstate puede no repetirse nunca para una
+  cuenta ya asentada, y no hay ninguna llamada consultable para pedirlo de
+  nuevo), borraba cualquier nombre ya conocido — no un parpadeo al
+  arrancar, el estado permanente. Reproducido a nivel código antes de
+  tocar nada (`seedFakeDevice`, sin pareo real). Fix: `recordOwnIdentity`
+  solo pisa `OwnName` cuando el valor nuevo no es vacío (mismo criterio
+  que `TouchChat` ya aplica a `chats.name`); `state.NewManager` siembra
+  `OwnName`/`OwnJID` (solo esos dos campos, nunca el resto del `Status`)
+  desde un `status.json` existente al arrancar.
+  - La hipótesis original ("arranca vacío, el archivo no se relee") no
+    explicaba por completo lo que vio el boss — `OwnJID`/`OwnName` los
+    escribe la misma llamada, así que un arranque en blanco dejaría los
+    dos vacíos, no solo el nombre. La causa real es la de arriba.
 
 ### Added
 - **Sello de versión en `get_manual`** (ct-2026-08-07, motivado por el
@@ -49,6 +200,151 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
   agregado por `manualWithVersionStamp` al responder — nunca escrito en el
   `.md` embebido, lee `version.Version` en vivo en cada llamada, así nunca
   puede desincronizarse del binario que lo sirve.
+- **T17 Parte 3 — avatares** (`ct-2026-08-05-1240`, sub-cambio partido
+  aparte con OK de Citrino). Funcionalidad nueva y delicada: pedir fotos
+  de perfil es actividad hacia WhatsApp, cuenta para el anti-ban igual
+  que cualquier acción server-facing — 719 números/591 contactos hacen
+  que un barrido masivo sea exactamente el patrón que tira una cuenta.
+  - **Nunca un sweep.** `whatsmeow.Adapter.RequestAvatar(jid)` solo se
+    llama desde `restapi` para un chat que el tablero está mostrando
+    ahora mismo (cabecera o una fila visible de la lista) — nunca sobre
+    todos los números conocidos.
+  - **Bajo demanda, pero con cola paceada.** Sin la cola, "bajo demanda"
+    con varios chats visibles a la vez sería una ráfaga disfrazada —
+    `avatarWorkerLoop` drena un jid a la vez, espaciado con el mismo
+    `governor.DelayWindow` que ya pacea el backfill de contactos/media
+    (`actionDelay()`).
+  - **El chequeo "¿cambió?" es gratis del lado del protocolo.**
+    `GetProfilePictureInfo` con el `ExistingID` cacheado devuelve
+    `(nil, nil)` sin transferir bytes cuando la foto no cambió —
+    verificado contra la librería whatsmeow vendorizada. El riesgo
+    anti-ban es la frecuencia de PREGUNTAR, no el peso de bajar.
+  - **Ventana de re-chequeo aleatoria, nunca fija.** Corrección de
+    Citrino sobre el primer borrador (que proponía "cada 7 días" liso):
+    un intervalo fijo es un patrón, y los patrones son lo que se
+    detecta. `avatarRecheckWindow()` sortea (mismo mecanismo
+    `governor.DelayWindow.Random()`) una ventana de 3-9 días por jid, en
+    cada chequeo — nunca el mismo offset dos veces para el mismo número.
+    Override en caliente vía `store.SettingAvatarRecheckMin/Max`
+    (`PIUMY_AVATAR_RECHECK_MIN/MAX`).
+  - **Cache en disco** (`store.Avatar`, tabla `avatars` — deliberadamente
+    fuera de `resetTables`, es un cache de WhatsApp, no historial del
+    boss). Confirmado-sin-foto borra el archivo cacheado (la persona
+    pudo haberla sacado); cualquier otro error bumpea el próximo chequeo
+    sin tocar el cache existente.
+  - **`GET /api/avatar?jid=`** sirve los bytes cacheados (mismo patrón
+    binario que `GET /api/media`) y dispara el chequeo paceado de paso,
+    sin esperarlo — sin cache, 404 inmediato.
+  - **Sin foto → iniciales**, nunca un cuadrado vacío ni un ícono roto
+    (`app.js#buildAvatar`, cabecera + lista de chats).
+  - **Evidencia real del pacing** (pedido explícito, "es la parte que
+    puede costar una cuenta"): `TestAvatarWorkerLoopPacesRequestsWithVariableGaps`
+    drena la cola con el loop real y mide separaciones reales entre
+    pedidos — nunca por debajo del mínimo configurado, nunca repetidas.
+  - `docs/T17-DIAGRAMA-NOMBRE-Y-AVATAR.md` actualizado con el detalle
+    completo de esta parte.
+
+### Changed
+- **T32** (`ct-2026-08-06-1109`, acuerdo con el líder de CleverCoder,
+  implementado del otro lado en v1.6.68.191) — el handshake de cAPI ya no
+  colapsa tres motivos de "no entrega" en un único error genérico.
+  CleverCoder ahora distingue: `antenna_off`/`position_empty`
+  (TRANSITORIO — el id es válido, no hay nadie ahí ahora mismo) vs.
+  `terminal_gone` (PERMANENTE — no corresponde a nada, nunca va a
+  existir). El despacho actúa distinto según cuál:
+  - `antenna_off`/`position_empty` → vuelve a la cola, igual que antes de
+    este cambio (reintento cada sweep, no consume el presupuesto de
+    redespacho, no da de baja el registro del agente).
+  - `terminal_gone` → `CleverInjector` descarta su propia credencial
+    (`markDead`, nuevo — `Configured()` pasa a `false`) y `dispatch()` deja
+    de reintentar contra ese agente, con una línea de log propia
+    explicando el motivo (no la genérica "canal caído", que implica una
+    recuperación que acá nunca llega). Solo una credencial nueva
+    (`SetConfig`, vía `set_capi_connector`/`register_agent`) lo revive.
+  - Un código que esta versión no reconoce (un CleverCoder viejo con el
+    `terminal_not_listening` de antes, o uno nuevo del futuro) se trata
+    como transitorio y queda en el log — nunca rompe ni descarta nada.
+  - **Compatibilidad hacia atrás intacta**: contra un CleverCoder anterior
+    a la 191 (sin el campo `error` en el body, o con un código que esta
+    versión no conoce) el comportamiento es EXACTAMENTE el de antes de
+    este cambio.
+  - Gratis, mismo protocolo: el `chat_id` que arma CleverCoder ahora es
+    estable y calculado; sin party, la forma sin agente nombra una
+    POSICIÓN (el N-ésimo terminal del proyecto), no un terminal puntual —
+    documentado en `store.Agent.AntennaTerminalID`, porque explica por qué
+    `position_empty` es normal y no una credencial mal configurada.
+  - `docs/T32-DIAGRAMA-MOTIVOS-NO-ENTREGA.md` con el detalle completo.
+- **T14 — el buscador va dentro de las pestañas** (`ct-2026-08-05-1232`,
+  el boss: *"y el buscador lo quiero dentro de las pestañas no fuera
+  (antes)"*). El `<input id="search">` vivía suelto arriba de todo, antes
+  del bloque de pestañas — buscando una sola cosa (conversaciones) pero
+  posicionado como si buscara en todo, cuando en realidad solo actuaba
+  sobre 3 de las 6 pestañas (Agentes/Reglas/Drafts nunca filtraron nada).
+  - **Reposicionar, no duplicar.** El mismo `<input>` (uno solo, nunca
+    copiado por pestaña) se movió a DESPUÉS de `.tabs-head` y ANTES de
+    los `.tab-panel` — queda visualmente agrupado con el contenido de la
+    pestaña activa, no separado arriba. `state.filterText`/
+    `matchesNeedle`/`foldAccents` ya eran los únicos helpers que Chats,
+    Grupos y Contactos compartían — no había lógica repetida que
+    consolidar, solo un input mal ubicado prometiendo más de lo que hacía.
+  - **`SEARCHABLE_TABS`** (`app.js`, nuevo) — el único lugar que decide
+    qué pestañas buscan y con qué placeholder. El mismo handler que
+    cambia de pestaña muestra/oculta el input entero para las que no
+    filtran (Agentes/Reglas/Drafts) en vez de dejarlo presente y muerto.
+  - **El filtro NO se arrastra al cambiar de pestaña** — se limpia
+    (`state.filterText` + el valor del input) en cada cambio. Cada
+    pestaña busca un universo distinto; una lista vacía sin ninguna pista
+    de que hay un filtro viejo activo se lee como "está roto", no como
+    "no hay resultados acá" — ahorrar un re-tipeo no compensa esa
+    confusión.
+  - Alternativa descartada: reparentar el `<input>` por JS dentro de cada
+    `.tab-panel` en cada cambio de pestaña, en vez de dejarlo fijo entre
+    `.tabs-head` y los paneles — más código por el mismo resultado
+    visual, ya que las 3 pestañas que buscan comparten el mismo layout
+    genérico.
+  - `node --check` sobre `app.js`; smoke manual (binario compilado,
+    `GET /dashboard/` verificado sirviendo el HTML/JS con la nueva
+    estructura) — sin navegador disponible en este entorno para el pase
+    visual completo.
+
+### Verified
+- **T17 Parte 2** (`ct-2026-08-05-1240`) — investigado antes de tocar
+  código: el push name YA se guardaba (`TouchChat` en cada mensaje
+  entrante) y la precedencia agenda → push name → número YA existía en
+  el frontend (`app.js#renderRow`, desde S1h). No era un bug — cerraba
+  solo un hueco de confirmación a nivel API
+  (`TestChatsEndpointNameCarriesPushNameWithNoAgendaEntry`). Los números
+  pelados que vio el boss son chats sin ningún mensaje entrante real —ahí
+  no hay push name que mostrar—, y T18/T18B (mismo día) ya los saca de la
+  pestaña Chats.
+
+### Removed
+- **T18B** (`ct-2026-08-05-1243`, sub-cambio sobre el hallazgo de T18,
+  decisión del boss vía Citrino) — se retira `chat_groups` entera:
+  `store.AddGroupMember`/`RemoveGroupMember` y la tabla misma. Nunca tuvo
+  escritor en código de producción (solo tests) — dos tablas para la
+  misma relación con solo una viva es la deuda que veníamos pagando todo
+  el día; `group_members` (la que el sync real de grupos escribe) queda
+  como fuente única.
+  - `ChatOrigin`/`GroupsOf`/`get_chat_groups` (MCP) leen `group_members`
+    ahora — `group_discovered` dispara de verdad por primera vez, y
+    `get_chat_groups` devuelve datos reales en vez de vacío siempre.
+  - La implementación paralela de `handleChats` (`isGroupMemberCanon`,
+    dejada sin tocar en T18 por estar bloqueada en esto) se consolidó
+    sobre `store.ChatOrigin` — cierra el punto 4 pendiente de T18.
+  - **Verificado antes de borrar, no dado por hecho**: sin datos que
+    migrar (confirmado, cero escritor real); `group_members` cubre
+    grupos donde el gateway no es admin (verificado contra la librería
+    whatsmeow vendorizada — sin filtro por rol en ningún lado);
+    `group_members` solo se refresca al conectar/reconectar o con un
+    `KickResync` explícito, nunca en vivo por evento — documentado como
+    ventana de frescura conocida, no resuelto (no era lo pedido), no
+    peor que antes (que nunca funcionaba en absoluto).
+  - `resetTables` de 8 a 7 nombres. `reconcile.go`'s nota de alcance
+    (fusión @lid↔número) actualizada a `group_members`.
+  - `docs/T18B-DIAGRAMA-RETIRAR-CHAT-GROUPS.md` con el detalle completo;
+    `docs/T18-DIAGRAMA-SEPARAR-POR-ORIGEN.md` marcado resuelto sin
+    reescribirse.
 
 ---
 
@@ -109,284 +405,6 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 ---
 
 ## En curso (sin desplegar)
-
-### Fixed
-- **T33 — actuar sobre otro chat dejaba el mensaje del dueño sin cerrar**
-  (`ct-2026-08-06-1526`, caso real en vivo: el boss ordenó por WhatsApp
-  escribirle a un tercer número, cambiarle las reglas y anotarle
-  memoria/contexto — su propio mensaje le llegó dos veces).
-  `send_message`/`draft` marcaban `MarkHandledBefore(to, ...)` — solo el
-  chat DESTINO. Cuando el despacho que se está atendiendo es un chat
-  distinto del destino, ese despacho nunca se marcaba, quedaba pendiente
-  y el sweep lo re-despachaba con un nonce nuevo. `silent_act` nunca tuvo
-  este bug (no tiene `to`, siempre marca el chat del despacho).
-  - **No es un bug nuevo de T31** — corrección registrada en
-    `docs/T33-DIAGRAMA-CERRAR-DESPACHO-OTRO-CHAT.md`: los bypasses de
-    terminal-principal y despacho-boss en `levelGateMiddleware` ya
-    permitían apuntar a otro chat antes de T31; T31 solo volvió eso el
-    caso cotidiano, no lo creó.
-  - Recorrido completo antes de codear (grep exhaustivo de
-    `gate.Consume`/`MarkHandledBefore`, 4 call sites en todo
-    `internal/mcpserver`): `approve_draft` verificado sano (marca el
-    chat del borrador, nunca toca el turno propio, a propósito).
-    Ninguna otra tool (`set_chat_rules`, `set_chat_memory`,
-    `set_chat_context`, `set_chat_status`, `set_chat_active`,
-    `set_mode`, `escalate`, `claim_chat`, `release_chat`,
-    `mark_handled`, `resolve_chat`) toca el turno — nunca lo tocó. Si el
-    turno entero de un agente es una de estas, el despacho queda
-    atado-sin-consumir hasta `DispatchStaleAfter` (15 min) — y el
-    **terminal entero** queda bloqueado ese tiempo, no solo ese chat.
-    Decisión (con Citrino): no cerrar automático ahí — arreglado por
-    skill, no por código.
-  - Fix: `markDispatchChatIfDifferent` (`send.go`), un helper compartido
-    entre los 3 call sites reales — cierra también el chat del despacho
-    activo cuando difiere del destino, usando `active.BurstMaxTS` (nunca
-    `now`, no marca de más). No-op en el caso de siempre (mismo chat).
-  - Skill del operador (`internal/mcpserver/manuals/operator/SKILL.md`)
-    corregida: tres afirmaciones que el código no respaldaba (una
-    contradecía a otra línea del mismo documento — mismo patrón que el
-    cifrado de T28), más la instrucción explícita del costo real de no
-    cerrar un turno puramente administrativo.
-  - Tests: `TestSendMessageToAnotherChatAlsoClosesDispatchChat`/
-    `TestDraftToAnotherChatAlsoClosesDispatchChat` (confirmados que
-    fallan sin el fix, antes de darlos por buenos),
-    `TestSendMessageToAnotherChatDoesNotMarkDispatchMessagesAfterBurst`,
-    `TestSendMessageSameChatDoesNotDoubleMark`.
-
-### Fixed
-- **T19 — el freno de emergencia ya sobrevive un reinicio**
-  (`ct-2026-08-05-1249`, descubierto probando la instancia con sesión
-  real — T10). `governor.SetKill`/`state.Muted` vivían solo en memoria:
-  un reinicio (corte de luz, un update, un crash — no hipotético, le
-  pasó al PC del boss: hibernó y el gateway se cayó) soltaba el freno en
-  silencio. Si en ese momento estaba frenado por una razón real, el
-  gateway volvía mandando exactamente cuando menos había que hacerlo.
-  - `set_kill_switch` (MCP y `POST /api/admin/kill`) ahora también
-    persiste a `store.SettingKillSwitch`, ANTES de aplicar el efecto en
-    vivo — best-effort, logueado, nunca bloquea el freno en sí por un
-    problema de disco.
-  - `main.go`'s `restoreKillSwitch` (nuevo) relee esa marca al arrancar y
-    aplica **las dos mitades juntas** (`governor.SetKill(true)` +
-    `state.SetMuted(true)`) — llamado justo después de que existen
-    `gov`/`sm`, muchísimo antes de `ctrl.Start()` (el único call que
-    puede hacer que el pipeline mande algo). El orden es la parte que
-    importaba: si arranca mandando y recién después lee el ajuste, ya
-    salió lo que no debía.
-  - El tablero ya mostraba el freno puesto en vivo (badge "⛔ kill" +
-    carita en mood `muted`) — con el freno restaurado correctamente
-    desde el arranque, esos mismos indicadores ahora también reflejan un
-    freno que sobrevivió un reinicio, sin UI nueva.
-  - Verificado con el binario real: `store` sembrado con el freno puesto,
-    reinicio, `GET /api/status` confirmado devolviendo
-    `governor_killed: true` / `muted: true` desde el primer poll.
-  - Tests: `main_test.go` (`TestRestoreKillSwitch*`, la restauración en
-    sí) + `corepipeline/outbox_test.go`'s
-    `TestKillSwitchSurvivesRestartAndReallyBlocksSending` — la prueba
-    explícitamente pedida de que un freno restaurado bloquea un envío
-    REAL, no solo que las banderas queden en `true`. Extendidos también
-    `TestSetKillSwitchFlipsGovernorAndState` (mcpserver) y
-    `TestSetKillSwitchEndpoint` (restapi) para cubrir la persistencia.
-
-### Changed
-- **T14 — el buscador va dentro de las pestañas** (`ct-2026-08-05-1232`,
-  el boss: *"y el buscador lo quiero dentro de las pestañas no fuera
-  (antes)"*). El `<input id="search">` vivía suelto arriba de todo, antes
-  del bloque de pestañas — buscando una sola cosa (conversaciones) pero
-  posicionado como si buscara en todo, cuando en realidad solo actuaba
-  sobre 3 de las 6 pestañas (Agentes/Reglas/Drafts nunca filtraron nada).
-  - **Reposicionar, no duplicar.** El mismo `<input>` (uno solo, nunca
-    copiado por pestaña) se movió a DESPUÉS de `.tabs-head` y ANTES de
-    los `.tab-panel` — queda visualmente agrupado con el contenido de la
-    pestaña activa, no separado arriba. `state.filterText`/
-    `matchesNeedle`/`foldAccents` ya eran los únicos helpers que Chats,
-    Grupos y Contactos compartían — no había lógica repetida que
-    consolidar, solo un input mal ubicado prometiendo más de lo que hacía.
-  - **`SEARCHABLE_TABS`** (`app.js`, nuevo) — el único lugar que decide
-    qué pestañas buscan y con qué placeholder. El mismo handler que
-    cambia de pestaña muestra/oculta el input entero para las que no
-    filtran (Agentes/Reglas/Drafts) en vez de dejarlo presente y muerto.
-  - **El filtro NO se arrastra al cambiar de pestaña** — se limpia
-    (`state.filterText` + el valor del input) en cada cambio. Cada
-    pestaña busca un universo distinto; una lista vacía sin ninguna pista
-    de que hay un filtro viejo activo se lee como "está roto", no como
-    "no hay resultados acá" — ahorrar un re-tipeo no compensa esa
-    confusión.
-  - Alternativa descartada: reparentar el `<input>` por JS dentro de cada
-    `.tab-panel` en cada cambio de pestaña, en vez de dejarlo fijo entre
-    `.tabs-head` y los paneles — más código por el mismo resultado
-    visual, ya que las 3 pestañas que buscan comparten el mismo layout
-    genérico.
-  - `node --check` sobre `app.js`; smoke manual (binario compilado,
-    `GET /dashboard/` verificado sirviendo el HTML/JS con la nueva
-    estructura) — sin navegador disponible en este entorno para el pase
-    visual completo.
-
-### Added
-- **T17 Parte 3 — avatares** (`ct-2026-08-05-1240`, sub-cambio partido
-  aparte con OK de Citrino). Funcionalidad nueva y delicada: pedir fotos
-  de perfil es actividad hacia WhatsApp, cuenta para el anti-ban igual
-  que cualquier acción server-facing — 719 números/591 contactos hacen
-  que un barrido masivo sea exactamente el patrón que tira una cuenta.
-  - **Nunca un sweep.** `whatsmeow.Adapter.RequestAvatar(jid)` solo se
-    llama desde `restapi` para un chat que el tablero está mostrando
-    ahora mismo (cabecera o una fila visible de la lista) — nunca sobre
-    todos los números conocidos.
-  - **Bajo demanda, pero con cola paceada.** Sin la cola, "bajo demanda"
-    con varios chats visibles a la vez sería una ráfaga disfrazada —
-    `avatarWorkerLoop` drena un jid a la vez, espaciado con el mismo
-    `governor.DelayWindow` que ya pacea el backfill de contactos/media
-    (`actionDelay()`).
-  - **El chequeo "¿cambió?" es gratis del lado del protocolo.**
-    `GetProfilePictureInfo` con el `ExistingID` cacheado devuelve
-    `(nil, nil)` sin transferir bytes cuando la foto no cambió —
-    verificado contra la librería whatsmeow vendorizada. El riesgo
-    anti-ban es la frecuencia de PREGUNTAR, no el peso de bajar.
-  - **Ventana de re-chequeo aleatoria, nunca fija.** Corrección de
-    Citrino sobre el primer borrador (que proponía "cada 7 días" liso):
-    un intervalo fijo es un patrón, y los patrones son lo que se
-    detecta. `avatarRecheckWindow()` sortea (mismo mecanismo
-    `governor.DelayWindow.Random()`) una ventana de 3-9 días por jid, en
-    cada chequeo — nunca el mismo offset dos veces para el mismo número.
-    Override en caliente vía `store.SettingAvatarRecheckMin/Max`
-    (`PIUMY_AVATAR_RECHECK_MIN/MAX`).
-  - **Cache en disco** (`store.Avatar`, tabla `avatars` — deliberadamente
-    fuera de `resetTables`, es un cache de WhatsApp, no historial del
-    boss). Confirmado-sin-foto borra el archivo cacheado (la persona
-    pudo haberla sacado); cualquier otro error bumpea el próximo chequeo
-    sin tocar el cache existente.
-  - **`GET /api/avatar?jid=`** sirve los bytes cacheados (mismo patrón
-    binario que `GET /api/media`) y dispara el chequeo paceado de paso,
-    sin esperarlo — sin cache, 404 inmediato.
-  - **Sin foto → iniciales**, nunca un cuadrado vacío ni un ícono roto
-    (`app.js#buildAvatar`, cabecera + lista de chats).
-  - **Evidencia real del pacing** (pedido explícito, "es la parte que
-    puede costar una cuenta"): `TestAvatarWorkerLoopPacesRequestsWithVariableGaps`
-    drena la cola con el loop real y mide separaciones reales entre
-    pedidos — nunca por debajo del mínimo configurado, nunca repetidas.
-  - `docs/T17-DIAGRAMA-NOMBRE-Y-AVATAR.md` actualizado con el detalle
-    completo de esta parte.
-
-### Fixed
-- **T17 Parte 1** (`ct-2026-08-05-1240`, el boss mandó capturas: la
-  cabecera decía "(sin nombre)" sobre un número real) — `recordOwnIdentity`
-  pisaba `state.OwnName` SIN CONDICIÓN en cada reconexión; cuando
-  `client.Store.PushName` volvía vacío (confirmado contra la librería
-  whatsmeow: esa mutación de appstate puede no repetirse nunca para una
-  cuenta ya asentada, y no hay ninguna llamada consultable para pedirlo de
-  nuevo), borraba cualquier nombre ya conocido — no un parpadeo al
-  arrancar, el estado permanente. Reproducido a nivel código antes de
-  tocar nada (`seedFakeDevice`, sin pareo real). Fix: `recordOwnIdentity`
-  solo pisa `OwnName` cuando el valor nuevo no es vacío (mismo criterio
-  que `TouchChat` ya aplica a `chats.name`); `state.NewManager` siembra
-  `OwnName`/`OwnJID` (solo esos dos campos, nunca el resto del `Status`)
-  desde un `status.json` existente al arrancar.
-  - La hipótesis original ("arranca vacío, el archivo no se relee") no
-    explicaba por completo lo que vio el boss — `OwnJID`/`OwnName` los
-    escribe la misma llamada, así que un arranque en blanco dejaría los
-    dos vacíos, no solo el nombre. La causa real es la de arriba.
-
-### Verified
-- **T17 Parte 2** (`ct-2026-08-05-1240`) — investigado antes de tocar
-  código: el push name YA se guardaba (`TouchChat` en cada mensaje
-  entrante) y la precedencia agenda → push name → número YA existía en
-  el frontend (`app.js#renderRow`, desde S1h). No era un bug — cerraba
-  solo un hueco de confirmación a nivel API
-  (`TestChatsEndpointNameCarriesPushNameWithNoAgendaEntry`). Los números
-  pelados que vio el boss son chats sin ningún mensaje entrante real —ahí
-  no hay push name que mostrar—, y T18/T18B (mismo día) ya los saca de la
-  pestaña Chats.
-
-### Changed
-- **T32** (`ct-2026-08-06-1109`, acuerdo con el líder de CleverCoder,
-  implementado del otro lado en v1.6.68.191) — el handshake de cAPI ya no
-  colapsa tres motivos de "no entrega" en un único error genérico.
-  CleverCoder ahora distingue: `antenna_off`/`position_empty`
-  (TRANSITORIO — el id es válido, no hay nadie ahí ahora mismo) vs.
-  `terminal_gone` (PERMANENTE — no corresponde a nada, nunca va a
-  existir). El despacho actúa distinto según cuál:
-  - `antenna_off`/`position_empty` → vuelve a la cola, igual que antes de
-    este cambio (reintento cada sweep, no consume el presupuesto de
-    redespacho, no da de baja el registro del agente).
-  - `terminal_gone` → `CleverInjector` descarta su propia credencial
-    (`markDead`, nuevo — `Configured()` pasa a `false`) y `dispatch()` deja
-    de reintentar contra ese agente, con una línea de log propia
-    explicando el motivo (no la genérica "canal caído", que implica una
-    recuperación que acá nunca llega). Solo una credencial nueva
-    (`SetConfig`, vía `set_capi_connector`/`register_agent`) lo revive.
-  - Un código que esta versión no reconoce (un CleverCoder viejo con el
-    `terminal_not_listening` de antes, o uno nuevo del futuro) se trata
-    como transitorio y queda en el log — nunca rompe ni descarta nada.
-  - **Compatibilidad hacia atrás intacta**: contra un CleverCoder anterior
-    a la 191 (sin el campo `error` en el body, o con un código que esta
-    versión no conoce) el comportamiento es EXACTAMENTE el de antes de
-    este cambio.
-  - Gratis, mismo protocolo: el `chat_id` que arma CleverCoder ahora es
-    estable y calculado; sin party, la forma sin agente nombra una
-    POSICIÓN (el N-ésimo terminal del proyecto), no un terminal puntual —
-    documentado en `store.Agent.AntennaTerminalID`, porque explica por qué
-    `position_empty` es normal y no una credencial mal configurada.
-  - `docs/T32-DIAGRAMA-MOTIVOS-NO-ENTREGA.md` con el detalle completo.
-
-### Removed
-- **T18B** (`ct-2026-08-05-1243`, sub-cambio sobre el hallazgo de T18,
-  decisión del boss vía Citrino) — se retira `chat_groups` entera:
-  `store.AddGroupMember`/`RemoveGroupMember` y la tabla misma. Nunca tuvo
-  escritor en código de producción (solo tests) — dos tablas para la
-  misma relación con solo una viva es la deuda que veníamos pagando todo
-  el día; `group_members` (la que el sync real de grupos escribe) queda
-  como fuente única.
-  - `ChatOrigin`/`GroupsOf`/`get_chat_groups` (MCP) leen `group_members`
-    ahora — `group_discovered` dispara de verdad por primera vez, y
-    `get_chat_groups` devuelve datos reales en vez de vacío siempre.
-  - La implementación paralela de `handleChats` (`isGroupMemberCanon`,
-    dejada sin tocar en T18 por estar bloqueada en esto) se consolidó
-    sobre `store.ChatOrigin` — cierra el punto 4 pendiente de T18.
-  - **Verificado antes de borrar, no dado por hecho**: sin datos que
-    migrar (confirmado, cero escritor real); `group_members` cubre
-    grupos donde el gateway no es admin (verificado contra la librería
-    whatsmeow vendorizada — sin filtro por rol en ningún lado);
-    `group_members` solo se refresca al conectar/reconectar o con un
-    `KickResync` explícito, nunca en vivo por evento — documentado como
-    ventana de frescura conocida, no resuelto (no era lo pedido), no
-    peor que antes (que nunca funcionaba en absoluto).
-  - `resetTables` de 8 a 7 nombres. `reconcile.go`'s nota de alcance
-    (fusión @lid↔número) actualizada a `group_members`.
-  - `docs/T18B-DIAGRAMA-RETIRAR-CHAT-GROUPS.md` con el detalle completo;
-    `docs/T18-DIAGRAMA-SEPARAR-POR-ORIGEN.md` marcado resuelto sin
-    reescribirse.
-
-### Fixed
-- **T18** (`ct-2026-08-05-1243`, el boss: su bandeja mezclaba ~1351 chats —
-  gente que le escribió junto a números que solo aparecieron en un grupo)
-  — `store.ChatOrigin` solo miraba mensajes ENTRANTES
-  (`from_me=0`): un chat que el dueño inició y nadie contestó caía en
-  `group_discovered`/`synced_contact` en vez de `inbound_spoke`, aunque
-  sea una conversación real. Reproducido con 3 casos concretos antes de
-  codear. Fix: reusa `realMessageSQL` (misma constante que
-  `ChatJIDsWithMessages` ya usa) sin filtro de dirección — de paso quedó
-  excluido el ruido de protocolo (recibos/reacciones sin texto ni tipo)
-  que la consulta original tampoco filtraba. El valor `"inbound_spoke"` se
-  mantuvo sin renombrar (viaja por `list_chats`/`get_chat`/
-  `decision-policy.md`) — se ajustaron esas 3 descripciones para decir lo
-  que el criterio significa de verdad, y remiten a `last_speaker` para
-  "me toca responder".
-  - `chatOut.Origin` expuesto en `GET /api/chats` — ya se calculaba en
-    cada `ListChats` (`enrichChat`) y se descontaba antes de esto.
-  - La pestaña Chats del tablero filtra por `origin === "inbound_spoke"`
-    (`app.js#isRealConversation`) en vez de `has_messages`.
-  - **Hallazgo sin resolver, flagueado a Citrino:** `chat_groups` (la
-    tabla que lee `group_discovered`) no tiene ningún escritor en código
-    de producción — solo tests. El sync real de grupos escribe
-    `group_members` (tabla hermana) a propósito, nunca `chat_groups`.
-    `group_discovered` no dispara hoy en producción, y `get_chat_groups`
-    (MCP) siempre devuelve vacío. La implementación paralela por
-    `group_members` que oculta números-solo-de-grupo en `handleChats`
-    quedó SIN TOCAR — es la única de las dos que funciona hoy; borrarla
-    antes de resolver `chat_groups` habría sido peor que dejarla.
-  - `docs/T18-DIAGRAMA-SEPARAR-POR-ORIGEN.md` con el detalle completo;
-    `docs/MANUAL.md` documenta el hallazgo de `chat_groups` y distingue
-    los tres conceptos de "origen" que conviven en el código (pedido de
-    Citrino).
 
 ### Changed
 - **T31** (`ct-2026-08-06-0244`, decisión del boss, revierte S10 —
