@@ -949,12 +949,11 @@ func (p *Pusher) newNonce() (string, error) {
 }
 
 // dispatchPayload builds the compact dispatch body (ct-2026-07-18-1416,
-// further shortened ct-2026-07-18-1851-B: numero/is_boss moved to the
-// envelope's "de:" — see envelopeFrom — so the body is now just the
-// message text, plus (for non-boss) the rules.md block). The nonce stays
-// as the signature line at the END, "NC:<4hex>" (shortened from a full hex
-// nonce, same reasoning as newNonce's doc) — get_instructions(nonce) needs
-// it verbatim. Was one of two branches (the other AES-256-GCM-encrypted)
+// further shortened ct-2026-07-18-1851-B: numero/nivel moved to the
+// envelope's "de:" — see envelopeFrom). The nonce stays as the signature
+// line at the END, "NC:<4hex>" (shortened from a full hex nonce, same
+// reasoning as newNonce's doc) — get_instructions(nonce) needs it
+// verbatim. Was one of two branches (the other AES-256-GCM-encrypted)
 // until T28 (ct-2026-08-05-2242) removed the encrypted one — this is the
 // only payload now, name simplified to match.
 //
@@ -964,6 +963,14 @@ func (p *Pusher) newNonce() (string, error) {
 // ahead of everything else, same store-lookup-at-dispatch-time pattern the
 // rules.md block below already uses. Unconditional on level: a rejected
 // draft can belong to any chat, boss included.
+//
+// Identity line (ct-2026-08-06, boss verbatim: "si soy boss tiene que
+// decir is boss, y si no, el preámbulo son las reglas. Todo mensaje con su
+// preámbulo") — ALWAYS present, unconditional on level: before this, the
+// boss's own dispatch carried NEITHER the identity nor its rules (the old
+// `if !isBoss` below skipped the whole block), leaving the agent to guess
+// who it was talking to. Rules now ride along for the boss too — the same
+// omission, same fix.
 func (p *Pusher) dispatchPayload(chatJID, level, nonce string, texts []string) string {
 	isBoss := level == mcpserver.LevelBoss
 
@@ -974,14 +981,26 @@ func (p *Pusher) dispatchPayload(chatJID, level, nonce string, texts []string) s
 		fmt.Fprintf(&b, "MOTIVO DE RECHAZO: %s\nTu borrador anterior: %s\n---\n", reason, prevText)
 	}
 	fmt.Fprintf(&b, "%s\n", strings.Join(texts, "\n"))
-	if !isBoss {
-		rules, err := p.store.EffectiveRules(chatJID)
-		if err != nil {
-			log.Printf("capipush: effective rules for dispatch %s: %v", chatJID, err)
-		} else if rules != "" {
-			fmt.Fprintf(&b, "```rules.md\n%s\n```\n", rules)
+
+	if isBoss {
+		fmt.Fprintf(&b, "is_boss: true — este chat es del DUEÑO de la cuenta\n")
+	} else {
+		isApprover := false
+		if c, ok, err := p.store.GetChat(chatJID); err != nil {
+			log.Printf("capipush: chat lookup for dispatch preamble %s: %v", chatJID, err)
+		} else if ok {
+			isApprover = c.IsApprover
 		}
+		fmt.Fprintf(&b, "is_boss: false, is_approver: %t — nivel %s\n", isApprover, level)
 	}
+
+	rules, err := p.store.EffectiveRules(chatJID)
+	if err != nil {
+		log.Printf("capipush: effective rules for dispatch %s: %v", chatJID, err)
+	} else if rules != "" {
+		fmt.Fprintf(&b, "```rules.md\n%s\n```\n", rules)
+	}
+
 	fmt.Fprintf(&b, "NC:%s\n", nonce)
 	return b.String()
 }

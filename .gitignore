@@ -45,6 +45,10 @@ _IGNORE_session/
 # Salida de build-all.sh (ct-2026-07-19-1414) — artefactos de build, no código.
 dist/
 
+# Generado por build-all.sh desde VERSION en cada corrida (ct-2026-08-06) —
+# el número no se escribe a mano acá, ver installer/windows/piumy.iss.
+installer/windows/version.iss
+
 # Python (adapters/display, ct-2026-07-19-1843) — bytecode cacheado, no código.
 __pycache__/
 *.pyc

@@ -13,9 +13,16 @@
 ; Compilar: ISCC.exe installer\windows\piumy.iss (desde coderoot/<worktree>,
 ; con dist\piumy-gateway-windows-amd64.exe ya construido — ver build-all.sh
 ; o el comando equivalente para windows/amd64).
+;
+; version.iss (junto a este archivo) NO se versiona — build-all.sh lo genera
+; en cada corrida a partir de VERSION (raíz del repo), la única fuente del
+; número. Inno Setup no tiene una forma cómoda de leer un archivo de texto
+; plano como valor, así que el intermediario es este #include con un
+; #define adentro. Compilar este .iss sin haber corrido build-all.sh antes
+; falla — mismo requisito que ya tenía dist\piumy-gateway-windows-amd64.exe.
+#include "version.iss"
 
 #define MyAppName "Piumy"
-#define MyAppVersion "0.1.4"
 #define MyAppPublisher "Piumy"
 #define MyAppExeName "Piumy.exe"
 #define MyBuiltExe "..\..\dist\piumy-gateway-windows-amd64.exe"
@@ -78,6 +85,12 @@ WizardStyle=modern
 ; agentclient.exe — el despacho ya no viaja con una segunda capa de
 ; cifrado propia, el túnel de cAPI (CleverCoder) alcanza. Vuelve a ser un
 ; paquete de 3 claves — mismo criterio de siempre, cambia lo que instala.
+; 0.1.5 (ct-2026-08-06, pedido del boss) recompila por dos manuales
+; go:embed actualizados (connect/SKILL.md, orchestrator/operacion.md) —
+; no cambia qué instala el paquete, cambia el binario embebido. Publicada
+; ya con esa versión; este commit pone el número en `VERSION` (raíz del
+; repo) como fuente única — antes solo vivía acá y en el literal de
+; server.go, y las dos copias se habían desincronizado.
 VersionInfoVersion={#MyAppVersion}
 
 [Languages]

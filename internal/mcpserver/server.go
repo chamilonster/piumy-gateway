@@ -32,6 +32,7 @@ import (
 	"piumy-gateway/internal/router"
 	"piumy-gateway/internal/state"
 	"piumy-gateway/internal/store"
+	"piumy-gateway/internal/version"
 )
 
 // Deps bundles everything the MCP server needs.
@@ -344,7 +345,7 @@ func New(ctx context.Context, d Deps) *server.MCPServer {
 	tracker := newAgentTracker(d.State, d.AgentIdle)
 	go tracker.sweep(ctx)
 
-	s := server.NewMCPServer("piumy-gateway", "0.1.0", server.WithToolCapabilities(true))
+	s := server.NewMCPServer("piumy-gateway", version.Version, server.WithToolCapabilities(true))
 
 	guard := d.Guard
 	if guard == nil {
@@ -381,7 +382,8 @@ func New(ctx context.Context, d Deps) *server.MCPServer {
 				state.Status
 				AllowAll    bool   `json:"router_allow_all"`
 				DefaultMode string `json:"router_default_mode,omitempty"`
-			}{Status: d.State.Snapshot(), AllowAll: allowAll, DefaultMode: defaultMode})
+				Version     string `json:"version"`
+			}{Status: d.State.Snapshot(), AllowAll: allowAll, DefaultMode: defaultMode, Version: version.Version})
 		})
 
 	// ── list_chats ───────────────────────────────────────────────────────

@@ -875,3 +875,79 @@ func TestGetInstructionsLogsUnknownNonce(t *testing.T) {
 		t.Errorf("log tras get_instructions con nonce desconocido = %q, want mención del caso", buf.String())
 	}
 }
+
+// decodeInstructions unwraps a get_instructions JSON-RPC response into its
+// Instructions payload — same double-unwrap as unlockToken, but keeping
+// every field instead of discarding all but Token.
+func decodeInstructions(t *testing.T, out string) Instructions {
+	t.Helper()
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("parse JSON-RPC envelope: %v\nraw: %s", err, out)
+	}
+	if len(envelope.Result.Content) == 0 {
+		t.Fatalf("no content in get_instructions response: %s", out)
+	}
+	var instr Instructions
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &instr); err != nil {
+		t.Fatalf("parse Instructions: %v\nraw text: %s", err, envelope.Result.Content[0].Text)
+	}
+	return instr
+}
+
+// TestGetInstructionsReportsIsBossAndIsApprover is the get_instructions
+// half of the ct-2026-08-06 preamble fix (boss verbatim: "todo mensaje con
+// su preámbulo") — an agent that reconnects mid-dispatch (nonce still
+// valid, the original cAPI preamble long gone) has no other way to learn
+// who it's talking to, so get_instructions needs the same identity the
+// dispatch preamble carries.
+func TestGetInstructionsReportsIsBossAndIsApprover(t *testing.T) {
+	gate := NewGate()
+	st, srv, ctx := serverWithGate(t, gate)
+
+	bossChat := "55500000090@c.us"
+	if err := st.TouchChat(bossChat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(bossChat, true); err != nil {
+		t.Fatal(err)
+	}
+	bossTermCtx := withTerminalID(ctx, "term-boss")
+	if err := gate.RegisterDispatch("nonce-boss", bossChat, LevelBoss, "term-boss", 0); err != nil {
+		t.Fatal(err)
+	}
+	bossOut := callTool(t, bossTermCtx, srv, "get_instructions", map[string]any{"nonce": "nonce-boss"})
+	bossInstr := decodeInstructions(t, bossOut)
+	if !bossInstr.IsBoss {
+		t.Errorf("boss dispatch: IsBoss = %v, want true", bossInstr.IsBoss)
+	}
+	if bossInstr.IsApprover {
+		t.Errorf("boss dispatch: IsApprover = %v, want false (never set for this chat)", bossInstr.IsApprover)
+	}
+
+	approverChat := "55500000091@c.us"
+	if err := st.TouchChat(approverChat, "Approver", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsApprover(approverChat, true); err != nil {
+		t.Fatal(err)
+	}
+	approverTermCtx := withTerminalID(ctx, "term-approver")
+	if err := gate.RegisterDispatch("nonce-approver", approverChat, LevelApprover, "term-approver", 0); err != nil {
+		t.Fatal(err)
+	}
+	approverOut := callTool(t, approverTermCtx, srv, "get_instructions", map[string]any{"nonce": "nonce-approver"})
+	approverInstr := decodeInstructions(t, approverOut)
+	if approverInstr.IsBoss {
+		t.Errorf("approver dispatch: IsBoss = %v, want false", approverInstr.IsBoss)
+	}
+	if !approverInstr.IsApprover {
+		t.Errorf("approver dispatch: IsApprover = %v, want true", approverInstr.IsApprover)
+	}
+}

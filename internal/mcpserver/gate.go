@@ -275,11 +275,17 @@ func (g *Gate) sweepLocked(now time.Time) {
 
 // Instructions is get_instructions' payload — Token last, on purpose: it
 // forces the agent to have ingested rules/memory/context to reach it.
+// IsBoss/IsApprover (ct-2026-08-06, boss verbatim: "si soy boss tiene que
+// decir is boss") mirror the same identity the dispatch preamble already
+// carries (capipush.dispatchPayload) — an agent that reconnects mid-way
+// (nonce still valid, preamble long gone) looks here instead.
 type Instructions struct {
-	Rules   string `json:"rules"`
-	Memory  string `json:"memory"`
-	Context string `json:"context"`
-	Token   string `json:"token"`
+	Rules      string `json:"rules"`
+	Memory     string `json:"memory"`
+	Context    string `json:"context"`
+	IsBoss     bool   `json:"is_boss"`
+	IsApprover bool   `json:"is_approver"`
+	Token      string `json:"token"`
 }
 
 // GetInstructions marks terminalID's dispatch (registered under nonce) as
@@ -326,7 +332,7 @@ func (g *Gate) GetInstructions(terminalID, nonce string, st *store.Store) (Instr
 	if err != nil {
 		return Instructions{}, err
 	}
-	return Instructions{Rules: rules, Memory: c.Memory, Context: c.Context, Token: token}, nil
+	return Instructions{Rules: rules, Memory: c.Memory, Context: c.Context, IsBoss: c.IsBoss, IsApprover: c.IsApprover, Token: token}, nil
 }
 
 // Unlock validates token against terminalID's active dispatch and

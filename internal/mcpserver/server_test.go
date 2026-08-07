@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"piumy-gateway/internal/router"
 	"piumy-gateway/internal/state"
 	"piumy-gateway/internal/store"
+	"piumy-gateway/internal/version"
 )
 
 // serverWithRouter builds a server against a caller-supplied router.json
@@ -465,5 +467,39 @@ func TestResetDashboardPasswordRotatesSessionSecret(t *testing.T) {
 	}
 	if before == after {
 		t.Error("reset_dashboard_password did not rotate dash_session_secret — old browser sessions would survive an emergency reset")
+	}
+}
+
+// TestGetStatusReportsRealVersion is the version-unification regression
+// (ct-2026-08-06): get_status is the one tool an agent can call without an
+// active dispatch (levelgate.go), so it's what CleverCoder reads on
+// connect to compare against the repo's VERSION. A hardcoded literal here
+// silently drifting from VERSION is exactly the bug that motivated
+// internal/version — this pins the two together.
+func TestGetStatusReportsRealVersion(t *testing.T) {
+	_, srv, ctx, _ := newTestServer(t)
+	out := callTool(t, ctx, srv, "get_status", map[string]any{})
+
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("decoding get_status envelope: %v (raw: %s)", err, out)
+	}
+	if len(envelope.Result.Content) == 0 {
+		t.Fatalf("get_status returned no content: %s", out)
+	}
+	var status struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &status); err != nil {
+		t.Fatalf("decoding get_status payload: %v (raw: %s)", err, envelope.Result.Content[0].Text)
+	}
+	if status.Version != version.Version {
+		t.Errorf("get_status version = %q, want %q (version.Version)", status.Version, version.Version)
 	}
 }

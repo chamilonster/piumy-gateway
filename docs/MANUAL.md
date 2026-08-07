@@ -2723,7 +2723,12 @@ el modelo vigente: tracking por `terminal_id`, default DENY) +
 - `(*Gate) GetInstructions(terminalID, nonce, st) (Instructions, error)` —
   **rechaza si el nonce fue registrado para OTRO terminal** (el chequeo
   anti-hijack: el terminal B nunca puede consumir un dispatch de A aunque
-  conozca el nonce — `TestGateCrossTerminalHijackFails`).
+  conozca el nonce — `TestGateCrossTerminalHijackFails`). `Instructions{Rules,
+  Memory, Context, IsBoss, IsApprover, Token}` — `IsBoss`/`IsApprover`
+  (ct-2026-08-06, T-preámbulo) leídos del `store.GetChat` que ya hacía esta
+  función, mismo dato que la línea de identidad de `capipush.dispatchPayload`
+  — un agente que se reconecta a mitad de camino (nonce vivo, el preámbulo
+  cAPI original ya no) los busca acá.
 - `(*Gate) NonceActive(nonce string) bool` (ct-2026-07-18-1851-B) — lectura
   simple de `byNonce`; `capipush.newNonce` la usa para regenerar el nonce
   corto (4 hex) en caso de colisión, en vez de registrar encima de un
@@ -3029,16 +3034,25 @@ propio que describen se sacó en T28, ver `docs/T28-DIAGRAMA-CAPI-SIN-CIFRADO.md
   - **`dispatchPayload`** (renombrada de `plaintextPayload` en T28 — ya no
     hay un segundo modo del que distinguirse) — el body: `strings.Join(texts,
     "\n")` solo, sin la línea `"whatsapp:(numero)(is_boss)(Mensaje:...)"`
-    (numero/nivel ya viven en `from`). Si el nivel NO es boss, se adjunta
-    `EffectiveRules(chatJID)` como bloque ```` ```rules.md ```` (boss no
-    lleva rules — serían las suyas propias, sin utilidad). Desde T15
-    (ct-2026-08-05-123241) consulta primero `store.PendingRejectionNote(chatJID)`
-    — si hay un draft `rejected` sin redraft todavía, antepone
-    `"MOTIVO DE RECHAZO: <reason>\nTu borrador anterior: <texto>\n---\n"`
-    ANTES de `texts` — mismo patrón "consultar el store al momento del
-    despacho" que ya usa el bloque `rules.md`, sin condicionar por nivel
-    (un draft rechazado puede ser de cualquier chat, boss incluido). Es la
-    forma en que el motivo "viaja con el mensaje" — Citrino: "no aparte".
+    (numero/nivel ya viven en `from`). Desde T15 (ct-2026-08-05-123241)
+    consulta primero `store.PendingRejectionNote(chatJID)` — si hay un
+    draft `rejected` sin redraft todavía, antepone `"MOTIVO DE RECHAZO:
+    <reason>\nTu borrador anterior: <texto>\n---\n"` ANTES de `texts` — sin
+    condicionar por nivel (un draft rechazado puede ser de cualquier chat,
+    boss incluido). Es la forma en que el motivo "viaja con el mensaje" —
+    Citrino: "no aparte".
+    **Línea de identidad (ct-2026-08-06, boss verbatim: "si soy boss tiene
+    que decir is boss... todo mensaje con su preámbulo") — SIEMPRE
+    presente, nunca condicionada:** boss → `"is_boss: true — este chat es
+    del DUEÑO de la cuenta"`; el resto → `"is_boss: false, is_approver:
+    <bool> — nivel <level>"` (`is_approver` resuelto con un `GetChat`
+    propio — `level` solo no alcanza para distinguirlo del caso
+    boss+approver). Antes de esta fecha el bloque entero (identidad +
+    reglas) se saltaba para el boss (`if !isBoss`) — su propio despacho
+    llegaba con el preámbulo vacío, bug reportado en vivo por el boss.
+    **`EffectiveRules(chatJID)`** se adjunta como bloque ```` ```rules.md
+    ```` para CUALQUIER nivel, boss incluido (omitido solo si viene
+    vacío) — antes se descartaban las reglas propias del boss.
   - **`(*Pusher) newNonce() (string, error)`** — nonce corto de 4 hex,
     prefijo `"NC:"` (`NC:8f9a`), última línea del body. El anti-replay real
     lo da el one-shot de la gate + el túnel cifrado de cAPI (CleverCoder,
@@ -3134,9 +3148,11 @@ propio que describen se sacó en T28, ver `docs/T28-DIAGRAMA-CAPI-SIN-CIFRADO.md
   dependencia de `store`. Ver `Gate`'s sección arriba para `dispatchStaleAfter`
   (la constante, 1h→15m). `Plaintext bool` (T28, ct-2026-08-05-2242) salió
   del struct — `dispatch` siempre entrega el texto compacto vía
-  `dispatchPayload` (capipush.go): los mensajes del burst, un bloque
-  ` ```rules.md``` ` opcional (omitido si `level` es boss, sin chat/reglas
-  que mostrar) y una línea final `NC:<nonce>`. `restapi.Deps.Plaintext`/
+  `dispatchPayload` (capipush.go): los mensajes del burst, una línea de
+  identidad SIEMPRE presente (`is_boss`/`is_approver`/`nivel` — T-preámbulo,
+  ct-2026-08-06), un bloque ` ```rules.md``` ` opcional (omitido solo si
+  `EffectiveRules` viene vacío, para cualquier nivel incluido boss) y una
+  línea final `NC:<nonce>`. `restapi.Deps.Plaintext`/
   `CAPIProducer` (ct-2026-07-22-2018, smoke fix del ping P8) salieron
   igual — `handleCAPIPing` arma ese mismo formato siempre, sin flag que
   chequear.

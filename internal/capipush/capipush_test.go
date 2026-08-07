@@ -1570,10 +1570,12 @@ func TestCapPreview(t *testing.T) {
 }
 
 // TestDispatchPayloadFormat verifies ct-2026-07-18-1416 (compact format),
-// ct-2026-07-18-180631 (dropped the redundant "piumy:" prefix), and
-// ct-2026-07-18-1851-B (numero/is_boss moved OUT of the body into the
-// envelope's from — see envelopeFrom — leaving the body as just the
-// message text, signed with a short "NC:<4hex>" line).
+// ct-2026-07-18-180631 (dropped the redundant "piumy:" prefix),
+// ct-2026-07-18-1851-B (numero/nivel moved OUT of the body into the
+// envelope's from — see envelopeFrom — leaving the message text as the
+// body's FIRST line), and the ct-2026-08-06 preamble fix: an identity
+// line (is_boss/is_approver/nivel) now always follows, before the
+// "NC:<4hex>" signature line at the end.
 func TestDispatchPayloadFormat(t *testing.T) {
 	st, _, _, inj, _ := newTestPusher(t, "")
 
@@ -1601,10 +1603,13 @@ func TestDispatchPayloadFormat(t *testing.T) {
 		t.Fatal("injector received no payload")
 	}
 	if strings.TrimSpace(strings.SplitN(payload, "\n", 2)[0]) != "hola" {
-		t.Errorf("payload = %q, want the body's first line to be just the message text (no numero/is_boss line)", payload)
+		t.Errorf("payload = %q, want the body's first line to be just the message text (no numero/nivel line — that's in the envelope from)", payload)
 	}
 	if strings.Contains(payload, "whatsapp:(") {
-		t.Errorf("payload = %q, want NO whatsapp:(...) line — numero/is_boss moved to the envelope from", payload)
+		t.Errorf("payload = %q, want NO whatsapp:(...) line — numero/nivel moved to the envelope from", payload)
+	}
+	if !strings.Contains(payload, "is_boss: false, is_approver: false — nivel danger") {
+		t.Errorf("payload = %q, want the identity line for a plain never-seen contact", payload)
 	}
 	if !strings.Contains(payload, "\nNC:") {
 		t.Errorf("payload = %q, want a NC:<4hex> signature line at the end", payload)
@@ -1614,10 +1619,14 @@ func TestDispatchPayloadFormat(t *testing.T) {
 	}
 }
 
-// TestDispatchBossOmitsRules verifies ct-2026-07-18-1416: the boss's
-// own chat never gets an EffectiveRules attachment (it would just be the
-// boss's own instructions echoed back to itself, not useful).
-func TestDispatchBossOmitsRules(t *testing.T) {
+// TestDispatchBossGetsIdentityLineAndRules is the regression for the
+// preamble fix (ct-2026-08-06, boss verbatim: "si soy boss tiene que decir
+// is boss... todo mensaje con su preámbulo"). Before this, the boss's own
+// dispatch carried NEITHER an identity line NOR its own rules — an agent
+// had to guess who it was talking to, and the boss's rules were silently
+// discarded. This is the concrete case the boss reported live: a real
+// dispatch to him came through with an empty preamble.
+func TestDispatchBossGetsIdentityLineAndRules(t *testing.T) {
 	st, _, _, inj, _ := newTestPusher(t, "")
 
 	gate := mcpserver.NewGate()
@@ -1649,8 +1658,50 @@ func TestDispatchBossOmitsRules(t *testing.T) {
 		t.Errorf("envelope from = %q, want it to end in \", boss\"", from)
 	}
 	payload := inj2.last()
-	if strings.Contains(payload, "rules.md") {
-		t.Errorf("payload = %q, want NO rules.md attachment for the boss's own chat", payload)
+	if !strings.Contains(payload, "is_boss: true") {
+		t.Errorf("payload = %q, want the identity line (is_boss: true) — this is the exact regression the boss reported: a dispatch to him with an empty preamble", payload)
+	}
+	if !strings.Contains(payload, "```rules.md\nsé breve\n```") {
+		t.Errorf("payload = %q, want the boss's own EffectiveRules attached too — they were being silently discarded", payload)
+	}
+}
+
+// TestDispatchApproverIdentityLineShowsIsApprover is the is_approver half
+// of the ct-2026-08-06 preamble fix (boss verbatim: "hoy tampoco viaja y
+// hace falta para el circuito de aprobación") — a non-boss chat's
+// is_approver pin now rides along in the identity line, not just the
+// level.
+func TestDispatchApproverIdentityLineShowsIsApprover(t *testing.T) {
+	st, _, _, inj, _ := newTestPusher(t, "")
+
+	gate := mcpserver.NewGate()
+	inj2 := &fakeInjectorPayload{}
+	pusher := New(st, nil, gate, inj2, Config{
+		PortFallback: "terminal1",
+		SwampedAt:    8,
+	})
+	_ = inj
+
+	chat := "approver@c.us"
+	if err := st.TouchChat(chat, "Approver", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsApprover(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "m1", FromMe: false, Text: "hola", TS: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	if from := inj2.lastFrom(); !strings.HasSuffix(from, ", approver") {
+		t.Errorf("envelope from = %q, want it to end in \", approver\"", from)
+	}
+	payload := inj2.last()
+	if !strings.Contains(payload, "is_boss: false, is_approver: true — nivel approver") {
+		t.Errorf("payload = %q, want the identity line to show is_approver: true", payload)
 	}
 }
 
