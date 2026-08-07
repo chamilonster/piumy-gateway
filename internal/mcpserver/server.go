@@ -207,6 +207,15 @@ func manualFor(role string) (manual string, ok bool) {
 	}
 }
 
+// manualWithVersionStamp appends the running build's version as a trailing
+// HTML comment — injected here at serve time, never written into the
+// embedded .md source, so it can never drift from what's actually running
+// (ct-2026-08-07, sello de versión: antes de esto no había forma de saber
+// si un manual leído era el de la versión que corre).
+func manualWithVersionStamp(manual string) string {
+	return manual + "\n\n<!-- piumy-skill-version: " + version.Version + " -->\n"
+}
+
 // decisionPolicy returns the current decision policy content and its
 // sha256 hash (policy_version), fresh on every call — an owner edit takes
 // effect immediately, no restart needed. Falls back to the embedded
@@ -471,7 +480,7 @@ func New(ctx context.Context, d Deps) *server.MCPServer {
 			if !ok {
 				return mcp.NewToolResultError("unknown role " + role + " — expected connect, orchestrator, or operator"), nil
 			}
-			return mcp.NewToolResultText(manual), nil
+			return mcp.NewToolResultText(manualWithVersionStamp(manual)), nil
 		})
 
 	addSendTools(s, d, gate, tracker)

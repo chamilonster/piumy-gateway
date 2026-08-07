@@ -90,7 +90,12 @@ WizardStyle=modern
 ; no cambia qué instala el paquete, cambia el binario embebido. Publicada
 ; ya con esa versión; este commit pone el número en `VERSION` (raíz del
 ; repo) como fuente única — antes solo vivía acá y en el literal de
-; server.go, y las dos copias se habían desincronizado.
+; server.go, y las dos copias se habían desincronizado. 0.1.6 recompila
+; con la versión ya unificada. 0.1.7 (T34, ct-2026-08-07, bug reportado
+; por el boss con captura) arregla el instalador: no cerraba solo el
+; Piumy corriendo (pedía al usuario que lo hiciera a mano) y en modo
+; desatendido devolvía éxito sin instalar nada — ver CloseRunningInstance
+; más abajo. No cambia qué instala el paquete, cambia CÓMO se instala.
 VersionInfoVersion={#MyAppVersion}
 
 [Languages]
@@ -604,6 +609,74 @@ begin
   Log('Piumy: instalación nueva — PIUMY_MCP_KEY/PIUMY_REST_KEY/PIUMY_BACKUP_KEY generadas.');
 end;
 
+{ ── T34 (ct-2026-08-07, bug reportado por el boss con captura): el diálogo
+    "Piumy está ejecutándose, ciérrelo y hacé clic en Aceptar" se quedaba
+    esperando a un usuario que a veces ni sabe cómo cerrar una app de
+    bandeja sin ventana — y en modo desatendido (/VERYSILENT
+    /SUPPRESSMSGBOXES) el diálogo suprimido respondía Cancelar por
+    defecto: exit code 1, pero SIN instalar nada — ya publicado en 0.1.6.
+
+    Causa: `AppMutex` (arriba) solo hace que Inno MUESTRE ese diálogo — no
+    cierra nada solo. `CloseApplications=yes` (RestartManager) es la vía
+    oficial de Inno para cerrar solo, pero se sospechaba que no detecta un
+    proceso de bandeja sin ventana principal — confirmado con un decoy
+    `-H windowsgui` que solo toma un mutex y duerme (T34, sin código de
+    producto real de por medio): con SOLO `CloseApplications=yes` puesto,
+    el decoy queda corriendo y el diálogo de todos modos aparece. La salida
+    es un cierre EXPLÍCITO, no delegado a RestartManager. }
+function IsImageRunning(const ImageName: String): Boolean;
+var
+  ResultCode: Integer;
+  OutFile: String;
+  Raw: AnsiString;
+begin
+  { tasklist con filtro, redirigido a un archivo temporal — Exec no expone
+    stdout directo en Pascal Script, así que se relee del disco. Se busca
+    el NOMBRE DE IMAGEN en la salida cruda (case-insensitive): si aparece,
+    sigue corriendo. No se intenta parsear el mensaje "no hay tareas" —
+    viene en el idioma de Windows, frágil; buscar la presencia del nombre
+    no depende de ningún idioma. }
+  Result := False;
+  OutFile := ExpandConstant('{tmp}\piumy-tasklist.txt');
+  if Exec(ExpandConstant('{cmd}'),
+     '/C tasklist.exe /FI "IMAGENAME eq ' + ImageName + '" /NH > "' + OutFile + '" 2>&1',
+     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
+      Result := Pos(Lowercase(ImageName), Lowercase(String(Raw))) > 0;
+    DeleteFile(OutFile);
+  end;
+end;
+
+{ CloseRunningInstance: mata ImageName por la fuerza (taskkill /F) y
+  VERIFICA que de verdad desapareció — no confía en el exit code de
+  taskkill (varía entre versiones de Windows), confía en volver a mirar
+  con tasklist. /F es TerminateProcess, casi instantáneo, pero el handle
+  del archivo puede tardar un instante en soltarse — de ahí el reintento
+  corto (hasta 5s) antes de darse por vencido. Si sigue detectándose
+  corriendo, devuelve un mensaje de error (no vacío) — el llamador
+  (InitializeSetup) lo propaga como Result := False, que es lo que hace
+  que el modo silencioso falle con exit code distinto de cero en vez de
+  proceder como si nada. }
+function CloseRunningInstance(const ImageName: String): String;
+var
+  ResultCode: Integer;
+  Attempt: Integer;
+begin
+  Result := '';
+  if not IsImageRunning(ImageName) then
+    Exit; { caso común: no había nada corriendo }
+  Exec('taskkill.exe', '/F /IM "' + ImageName + '"', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode);
+  for Attempt := 1 to 10 do
+  begin
+    if not IsImageRunning(ImageName) then
+      Exit;
+    Sleep(500);
+  end;
+  Result := 'Piumy: había una instalación de Piumy corriendo (' + ImageName + ') y no se pudo cerrar automáticamente. Cerrala a mano (ícono junto al reloj, clic derecho, Salir) y volvé a ejecutar el instalador.';
+end;
+
 { PrepareToInstall corre DESPUÉS de "Listo para instalar" (el usuario ya
   confirmó la carpeta de instalación) pero ANTES de copiar un solo archivo
   — el momento correcto para poder abortar limpio: devolver un string no
@@ -611,11 +684,45 @@ end;
   code distinto de cero, sin dejar nada a medio escribir) y corre
   IGUAL en modo silencioso (WizardSilent no lo salta). Guarda el
   resultado en las globales Resolved* — CurStepChanged (ssPostInstall)
-  las usa tal cual, sin volver a leer ni poder abortar ahí. }
+  las usa tal cual, sin volver a leer ni poder abortar ahí.
+
+  T34: el cierre de la instancia corriendo NO va acá — ver InitializeSetup
+  más abajo. Se probó primero acá (boss verbatim: "que el instalador lo
+  haga en el primer paso", y esta función es la que ya usa el patrón
+  "string no vacío = aborta limpio") pero un log real (/LOG=, decoy T34)
+  mostró que Inno nunca llega a llamar a PrepareToInstall: su propio
+  diálogo de AppMutex corre ANTES, dispara un EAbort y aborta la
+  instalación entera sin que ninguna línea de este archivo se ejecute —
+  "Defaulting to Cancel for suppressed message box" en el log, cero
+  llamadas a Log() propias. PrepareToInstall es DEMASIADO TARDE para esto;
+  InitializeSetup corre antes que cualquier chequeo interno de Inno. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := ResolveKeys(ExpandConstant('{app}\piumy-config.json'), ExpandConstant('{app}\run-piumy.bat'),
     ResolvedMcpKey, ResolvedRestKey, ResolvedBackupKey, ResolvedRestAddr);
+end;
+
+{ ── T34: InitializeSetup es el primer código de este script que corre —
+  antes de que Inno haga NINGUNO de sus propios chequeos internos
+  (AppMutex incluido). Cerrar acá, sin preguntar, es lo único que logra
+  que el diálogo de AppMutex nunca llegue a dispararse — confirmado con
+  log real contra un decoy (ver el comentario de PrepareToInstall arriba
+  para el porqué se movió). Devolver False acá cancela TODO el setup,
+  ANTES de mostrar una sola página del wizard — mismo mecanismo de "string
+  no vacío"/"False = aborta" que ya usa PrepareToInstall, pero un paso
+  antes en el ciclo de vida. }
+function InitializeSetup(): Boolean;
+var
+  CloseErr: String;
+begin
+  CloseErr := CloseRunningInstance('{#MyAppExeName}');
+  Result := CloseErr = '';
+  if not Result then
+  begin
+    Log('Piumy: ' + CloseErr);
+    if not WizardSilent then
+      MsgBox(CloseErr, mbError, MB_OK);
+  end;
 end;
 
 { ── T8 (ct-2026-08-05-1133): un solo defecto con dos síntomas — la página

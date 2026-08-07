@@ -112,12 +112,16 @@ func TestGetDecisionPolicyTool(t *testing.T) {
 // assigned.
 func TestGetManualTool(t *testing.T) {
 	_, srv, ctx, _ := newTestServer(t)
+	wantStamp := "<!-- piumy-skill-version: " + version.Version + " -->"
 
 	orch := callTool(t, ctx, srv, "get_manual", map[string]any{"role": "orchestrator"})
 	for _, want := range []string{"Piumy — el que conduce", "Círculo cercano", "quién aprueba", "arrancar", "Dirección"} {
 		if !strings.Contains(orch, want) {
 			t.Errorf("get_manual(orchestrator) missing %q — want the SKILL/escenarios/perillas/operacion/direccion content joined", want)
 		}
+	}
+	if !strings.Contains(decodeToolText(t, orch), wantStamp) {
+		t.Errorf("get_manual(orchestrator) missing version stamp %q", wantStamp)
 	}
 
 	op := callTool(t, ctx, srv, "get_manual", map[string]any{"role": "operator"})
@@ -126,6 +130,9 @@ func TestGetManualTool(t *testing.T) {
 	}
 	if strings.Contains(op, "Círculo cercano") {
 		t.Error("get_manual(operator) contains orchestrator content — roles must not bleed into each other")
+	}
+	if !strings.Contains(decodeToolText(t, op), wantStamp) {
+		t.Errorf("get_manual(operator) missing version stamp %q", wantStamp)
 	}
 
 	conn := callTool(t, ctx, srv, "get_manual", map[string]any{"role": "connect"})
@@ -137,10 +144,31 @@ func TestGetManualTool(t *testing.T) {
 	if strings.Contains(conn, "Círculo cercano") || strings.Contains(conn, "Piumy — operador") {
 		t.Error("get_manual(connect) contains orchestrator/operator content — roles must not bleed into each other")
 	}
+	if !strings.Contains(decodeToolText(t, conn), wantStamp) {
+		t.Errorf("get_manual(connect) missing version stamp %q", wantStamp)
+	}
 
 	out := callTool(t, ctx, srv, "get_manual", map[string]any{"role": "bogus"})
 	if !strings.Contains(out, "unknown role") {
 		t.Errorf("get_manual(bogus) = %s, want an unknown-role refusal", out)
+	}
+}
+
+// TestGetManualVersionStampTracksVersion (ct-2026-08-07, sello de versión):
+// guards against the stamp being hardcoded instead of read live from
+// version.Version — flips the package var mid-test (it's a var, not a
+// const, exactly so build-all.sh's -ldflags -X can set it) and checks the
+// served manual's stamp follows.
+func TestGetManualVersionStampTracksVersion(t *testing.T) {
+	_, srv, ctx, _ := newTestServer(t)
+
+	original := version.Version
+	version.Version = "9.9.9-test"
+	t.Cleanup(func() { version.Version = original })
+
+	out := callTool(t, ctx, srv, "get_manual", map[string]any{"role": "operator"})
+	if text := decodeToolText(t, out); !strings.Contains(text, "<!-- piumy-skill-version: 9.9.9-test -->") {
+		t.Errorf("get_manual(operator) = %s, want it to reflect the overridden version.Version", text)
 	}
 }
 

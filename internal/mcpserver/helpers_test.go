@@ -37,6 +37,28 @@ func callTool(t *testing.T, ctx context.Context, srv *server.MCPServer, name str
 	return string(out)
 }
 
+// decodeToolText extracts a single-text-content tool result's payload from
+// callTool's raw JSON-RPC envelope — needed whenever the payload itself
+// contains characters json.Marshal HTML-escapes (<, >, &), which a raw
+// substring match against the envelope would miss.
+func decodeToolText(t *testing.T, out string) string {
+	t.Helper()
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("decoding tool result envelope: %v (raw: %s)", err, out)
+	}
+	if len(envelope.Result.Content) == 0 {
+		t.Fatalf("tool result has no content: %s", out)
+	}
+	return envelope.Result.Content[0].Text
+}
+
 func newTestServer(t *testing.T) (*store.Store, *server.MCPServer, context.Context, *Gate) {
 	t.Helper()
 	dir := t.TempDir()

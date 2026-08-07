@@ -6,6 +6,108 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.7 — 2026-08-07
+
+### Fixed
+- **El instalador no cerraba el Piumy corriendo** (`ct-2026-08-07-0415-t34`,
+  bug reportado por el boss con captura). Dos fallas, no una: en modo
+  interactivo pedía al usuario cerrar la app a mano — y Piumy es de bandeja,
+  sin ventana, así que ni sabía cómo. En modo desatendido (`/VERYSILENT
+  /SUPPRESSMSGBOXES`) el diálogo de `AppMutex` (suprimido, respuesta por
+  defecto Cancelar) disparaba un `EAbort` — Inno terminaba con exit code 1,
+  pero **sin instalar nada**: el peor de los dos mundos, ya publicado en
+  0.1.6. Auditando el registro apareció el alcance real: la última
+  instalación que el instalador completó de verdad acá fue **0.1.3** — desde
+  entonces cada actualización de binario fue manual (los `Piumy.exe.bak-pre-*`
+  en la carpeta real lo confirman).
+  `CloseApplications=yes` (RestartManager) no alcanza contra una app de
+  bandeja sin ventana principal — confirmado con un decoy `-H windowsgui`
+  que solo toma el mutex y duerme, sin código de producto real de por medio:
+  con RestartManager solo, el decoy queda corriendo y el diálogo igual
+  aparece. El cierre es explícito (`taskkill /F` por nombre de imagen,
+  verificado releyendo `tasklist` — no el exit code de `taskkill`, que varía
+  entre versiones de Windows) y corre en `InitializeSetup`, no en
+  `PrepareToInstall`: un log real (`/LOG=`) mostró que el propio diálogo de
+  Inno dispara y aborta ANTES de que `PrepareToInstall` llegue a
+  ejecutarse — `InitializeSetup` es el primer código del script, corre antes
+  que cualquier chequeo interno de Inno. Si no logra cerrar la instancia
+  corriendo, el instalador ahora aborta con exit code distinto de cero —
+  nunca más "0 sin instalar nada". Piumy se relanza solo al terminar (ya lo
+  hacía, sin cambios).
+  Probado contra un decoy propio, nunca contra la instalación real: modo
+  silencioso — cierra el proceso viejo, instala, `DisplayVersion` en el
+  registro pasa de la versión vieja a la nueva (no queda pegado), relanza,
+  exit 0; modo interactivo — ningún diálogo aparece (confirmado por título
+  de ventana, va directo al wizard normal); camino de falla — exit code
+  distinto de cero confirmado forzando el chequeo de verificación.
+
+### Added
+- **Sello de versión en `get_manual`** (ct-2026-08-07, motivado por el
+  rescate de contenido solo-en-copias: hasta ahora no había forma de saber
+  si un manual leído era el de la versión que corre). Cada manual servido
+  por `get_manual` termina con `<!-- piumy-skill-version: X.Y.Z -->`,
+  agregado por `manualWithVersionStamp` al responder — nunca escrito en el
+  `.md` embebido, lee `version.Version` en vivo en cada llamada, así nunca
+  puede desincronizarse del binario que lo sirve.
+
+---
+
+## 0.1.6 — 2026-08-07
+
+### Added
+- **Preámbulo en todo despacho** (`ct-2026-08-05-0155`, boss verbatim: *"si soy
+  boss tiene que decir is boss, y si no, el preámbulo son las reglas. Todo
+  mensaje con su preámbulo"*). `dispatchPayload` tenía un `if !isBoss` que
+  omitía el bloque entero justo para el dueño: su mensaje llegaba con el texto
+  y el nonce, sin reglas y sin decir con quién se hablaba — el agente tenía que
+  deducirlo. Comprobado en vivo. Ahora la línea de identidad va siempre
+  (`is_boss` / `is_approver` / nivel) y las reglas efectivas se adjuntan para
+  cualquier nivel, incluido el dueño, cuyas reglas propias se descartaban.
+  `get_instructions` expone los mismos dos campos para el agente que se
+  reconecta a mitad de camino.
+- **Versión única de verdad** (`VERSION` en la raíz). Convivían tres números y
+  ninguno coincidía: el código decía `0.1.0`, el instalador `0.1.4`, y lo
+  publicado era `0.1.5`. `build-all.sh` inyecta por ldflags y genera el define
+  del instalador; `server.go` usa la constante; **`get_status` expone el campo
+  `version`** — es la única tool que responde sin despacho activo, así que un
+  cliente puede preguntar contra qué versión habla apenas se conecta. `go:embed`
+  no lee fuera del paquete y los symlinks no son portables en Windows:
+  `internal/version` guarda una copia que el build resincroniza, con test que
+  falla si divergen.
+
+### Security
+- **Datos personales fuera del repositorio.** Auditando antes del primer push
+  público apareció `docs/S13-C1-PARES.csv` con **559 personas — nombre y
+  teléfono**, más el JID del boss, nombres de contactos en comentarios y un
+  grupo real en tests. Evidencia sacada del repo, ~124 identificadores
+  sustituidos por prefijo `555` en 35 archivos, docs reescritos. Freno duro en
+  `.githooks/pre-commit` (activar con `git config core.hooksPath .githooks`),
+  reglas en `constitution.md §2b`. Boss verbatim: *"no deberia haber ni siquiera
+  numeros de prueba… el server debe venir limpio, igual que un server nomral"*.
+  Las cabeceras de copyright conservan la autoría: ahí el nombre es del autor.
+
+### Docs
+- **Manuales embebidos**: dónde se instala Piumy con rutas concretas, de dónde
+  se descarga, la configuración MCP por defecto, y que **conectado no es
+  habilitado** — sin despacho activo toda tool de acción responde `default DENY`,
+  `get_status` es la puerta permitida, y un despacho no se fabrica.
+
+### Published
+- **Código fuente público**: `github.com/chamilonster/piumy-gateway`, AGPL v3,
+  historia limpia (el historial de desarrollo contiene datos reales de pruebas).
+  Repo separado del sitio a propósito: `piumy.app` se publica desde `master` de
+  `chamilonster/Piumy` y un push encima lo habría tumbado.
+- **Instaladores 0.1.5 y 0.1.6** como releases en `chamilonster/Piumy`.
+
+### Known issue
+- **El instalador no cierra el Piumy corriendo** (`ct-2026-08-07-0415-t34`, en
+  vuelo). `AppMutex` detecta la instancia viva pero falta `CloseApplications`:
+  muestra un diálogo pidiéndole al usuario que lo cierre a mano — y Piumy es app
+  de bandeja, sin ventana. Peor: en modo desatendido **devuelve código 0 sin
+  instalar nada**. Afecta a 0.1.5 y 0.1.6. Sale arreglado en 0.1.7.
+
+---
+
 ## En curso (sin desplegar)
 
 ### Fixed

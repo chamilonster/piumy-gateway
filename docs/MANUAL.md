@@ -1990,6 +1990,13 @@ el modelo vigente: tracking por `terminal_id`, default DENY) +
   el subcontrato) pero no lo agregué al commit, siguiendo el precedente
   real de los otros dos — si la intención era trackearlo, es una
   corrección de una línea (`git add`).
+  **Sello de versión (ct-2026-08-07):** cada manual servido termina con
+  `<!-- piumy-skill-version: X.Y.Z -->`, agregado por `manualWithVersionStamp`
+  al responder — nunca escrito en el `.md` embebido, lee `version.Version`
+  en el momento de la llamada, así nunca puede desincronizarse del binario
+  que lo sirve. Motivador: el rescate de contenido solo-en-copias mostró
+  que hoy no hay forma de saber si un manual leído es el de la versión que
+  corre.
 
 **Agentes secundarios** (`agent_tools.go`, Multi-agente F1)
 - `register_agent(endpoint, antenna_terminal_id, pinpass, name?)` — el
