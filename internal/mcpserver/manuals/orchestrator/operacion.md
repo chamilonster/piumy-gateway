@@ -79,7 +79,7 @@ En el tablero hay **Ver QR / Reconectar** (repara sin reiniciar el programa) y *
 
 Piumy despacha por **cAPI** (CleverCoder, antena + handshake + túnel cifrado por
 terminal) — el protocolo en sí es de CleverCoder, no de Piumy: la skill
-`capi-protocol` es su fuente de verdad, léela ahí, no acá. Lo que sí es de
+`capi-protocol` es su fuente de verdad, léela ahí, no aquí. Lo que sí es de
 Piumy: **decisión T28 (ct-2026-08-05-2242, el boss) — el despacho viaja en
 texto plano dentro de ese túnel.** Piumy tuvo una segunda capa de cifrado
 propia (una clave más, un binario más) y se sacó — el túnel de cAPI ya
@@ -92,7 +92,7 @@ un cableado de descifrado que falta — es la antena apagada, o el conector
 mal registrado. Ver `piumy-connect` (el manual de conexión) para el
 procedimiento paso a paso.
 
-Si armás a mano un `curl` con texto que escribió una persona (un mensaje,
+Si armas a mano un `curl` con texto que escribió una persona (un mensaje,
 una regla) contra el MCP o la REST, nunca lo pases inline en la línea de
 comandos — se rompe en cualquier idioma con caracteres fuera de ASCII, no
 solo en español. `piumy-connect` tiene el porqué y la forma segura

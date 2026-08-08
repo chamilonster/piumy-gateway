@@ -41,7 +41,7 @@ Se combinan. Casi siempre son varios a la vez, uno por grupo de chats.
 Orden, sin saltear:
 
 1. **Cambiar la clave del tablero.** Viene con clave de fábrica. Primer paso, no último.
-2. **Parear el teléfono** — QR. Advertirle acá mismo: si se pierde esa sesión, hay que parear de nuevo (`operacion.md`). El número con el que se parea queda marcado dueño SOLO, sin que nadie toque nada (T12) — nada que hacer en este paso más allá de parear.
+2. **Parear el teléfono** — QR. Advertirle aquí mismo: si se pierde esa sesión, hay que parear de nuevo (`operacion.md`). El número con el que se parea queda marcado dueño SOLO, sin que nadie toque nada (T12) — nada que hacer en este paso más allá de parear.
 3. **Si tiene OTRO número personal que también quiere como dueño, decírselo al sistema.** El que pareó WhatsApp ya quedó marcado solo (paso anterior) — esto es solo para un segundo número, y es manual a propósito: ningún otro número se puede adivinar.
 4. **Elegir qué pasa con el que llega nuevo** — desconocido: ¿se atiende, se ignora, espera visto bueno?
 5. **Escribir las reglas** — cómo tiene que hablar el agente. Se las sacas conversando, no le pidas que las redacte.

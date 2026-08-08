@@ -48,7 +48,7 @@ Chats que entran desde la publicidad. Todos desconocidos, y llegan de golpe.
 
 **Pregunta:** "El que te escribe por primera vez, ¿lo atendemos, lo dejamos esperando, o lo ignoramos?"
 
-**Deja puesto:** la política del desconocido es la decisión central acá. Un contacto nuevo arranca sin atención hasta que alguien lo active — eso protege, pero si nadie mira, se pierden.
+**Deja puesto:** la política del desconocido es la decisión central aquí. Un contacto nuevo arranca sin atención hasta que alguien lo active — eso protege, pero si nadie mira, se pierden.
 
 **Cuidado:** cuando llega mucho junto, el sistema **frena solo** el ritmo de despacho. No está roto: se está cuidando de que WhatsApp lo marque como spam. No lo fuerces.
 

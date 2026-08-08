@@ -182,7 +182,7 @@ func (a *Adapter) SetGroupDescription(ctx context.Context, groupJID, description
 // API for that. Wraps SetStatusMessage 1:1, same wrapper shape as the group
 // methods above.
 func (a *Adapter) SetProfileStatus(ctx context.Context, status string) error {
-	return a.client.SetStatusMessage(ctx, status)
+	return a.client.SetStatusMessage(ctx, types.SetStatusInput{Text: &status})
 }
 
 // ── NO USAR (evaluado y descartado, con motivo) ─────────────────────────

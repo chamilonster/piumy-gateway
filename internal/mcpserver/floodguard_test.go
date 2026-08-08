@@ -34,8 +34,20 @@ func newFloodGuardTestServer(t *testing.T, guard *mcpguard.Guard) (*store.Store,
 
 // TestFloodGuardThrottlesGeneralCalls proves the middleware wraps every
 // registered tool, not just send_message/escalate.
+//
+// ct-2026-08-07: pinned to a fixed clock (SetClock) instead of the guard's
+// default time.Now — the 3 calls below must land within the SAME instant
+// from the bucket's point of view, and real elapsed time between them isn't
+// guaranteed to stay near-zero under heavy system load. bucket.allow's
+// refill is real-elapsed-time-based (by design, so production correctly
+// grants a fresh token if a client's calls are genuinely spread out) — with
+// RatePerMin:2, just 30 real seconds between the 2nd and 3rd call refills
+// exactly the one token the 3rd call needs, which flaked this test under
+// load without anything actually wrong in the guard.
 func TestFloodGuardThrottlesGeneralCalls(t *testing.T) {
 	guard := mcpguard.New(mcpguard.Config{RatePerMin: 2, EmitRatePerMin: 100, BlockThreshold: 100})
+	frozen := time.Now()
+	guard.SetClock(func() time.Time { return frozen })
 	_, srv, ctx := newFloodGuardTestServer(t, guard)
 
 	for i := 0; i < 2; i++ {

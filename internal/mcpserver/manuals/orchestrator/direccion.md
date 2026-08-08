@@ -2,7 +2,7 @@
 
 # Dirección — lee esto antes de proponer un cambio al producto
 
-Un cambio que se ve bien en la demo y contradice el diseño cuesta más que no hacerlo. Acá está hacia dónde va, y qué ya está decidido.
+Un cambio que se ve bien en la demo y contradice el diseño cuesta más que no hacerlo. Aquí está hacia dónde va, y qué ya está decidido.
 
 ## La tesis
 
@@ -28,7 +28,7 @@ Crece de forma **aditiva**: agregar una dimensión de canal, o varias cuentas, s
 
 **Callarse es una acción.** No contestar es una decisión legítima y cierra el turno igual que responder.
 
-## Cómo se construye acá
+## Cómo se construye aquí
 
 - **Una cosa por pieza.** Cada parte hace una sola cosa y se cambia sin tocar el resto.
 - **Nada clavado a mano.** Los valores salen de la configuración, de la base o de las reglas. Un atajo temporal se comenta con su techo y su salida.

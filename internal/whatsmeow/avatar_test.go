@@ -189,6 +189,23 @@ func TestAvatarRecheckWindowRespectsKVOverride(t *testing.T) {
 	}
 }
 
+// pacingMeasurementSlop tolerates the error this test's OWN instrumentation
+// adds on top of the real sleep — not a loosening of the pacing guarantee
+// (ct-2026-08-07, reproduced under load by Citrino: a real run measured
+// 29.4966ms against actionDelayMin=30ms, 0.5ms/1.7% short). Two independent,
+// real sources, neither one a pacing bug: (1) this test observes a dequeue
+// by POLLING len(a.avatarQueue) every 1ms, not by a synchronous signal, so
+// each recorded timestamp already lags the true dequeue moment by up to
+// ~1ms on an idle machine, more under load — and that lag doesn't cancel
+// symmetrically between two consecutive polls; (2) goroutine scheduling
+// delay between actionDelay()'s timer firing and the woken goroutine
+// actually calling time.Now(), plus Windows' own clock-resolution error —
+// both grow under system load, never shrink it. A margin here can only ever
+// make a real gap read as SHORTER than it was, never longer, so it cannot
+// hide genuine bursty/near-instant behavior — it exists purely to absorb
+// how this test measures, not what the code under test does.
+const pacingMeasurementSlop = 2 * time.Millisecond
+
 // TestAvatarWorkerLoopPacesRequestsWithVariableGaps is T17 Parte 3's
 // required evidence (ct-2026-08-05-1240 — Citrino: "mostrame la evidencia
 // del pacing: cuántas peticiones salieron, con qué separación. Es la parte
@@ -243,8 +260,8 @@ func TestAvatarWorkerLoopPacesRequestsWithVariableGaps(t *testing.T) {
 		gap := dequeues[i].Sub(dequeues[i-1])
 		gaps = append(gaps, gap)
 		t.Logf("  petición %d -> %d: separación %v", i, i+1, gap.Round(time.Millisecond))
-		if gap < a.actionDelayMin {
-			t.Errorf("separación %d = %v, want >= actionDelayMin (%v) — nunca casi-instantáneo, siempre paceado", i, gap, a.actionDelayMin)
+		if gap < a.actionDelayMin-pacingMeasurementSlop {
+			t.Errorf("separación %d = %v, want >= actionDelayMin (%v) menos %v de margen de medición — nunca casi-instantáneo, siempre paceado", i, gap, a.actionDelayMin, pacingMeasurementSlop)
 		}
 	}
 	for i := 1; i < len(gaps); i++ {

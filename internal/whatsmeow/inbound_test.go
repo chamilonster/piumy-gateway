@@ -1068,3 +1068,59 @@ func TestHandleEventAppStateSyncCompleteOtherCollectionIgnored(t *testing.T) {
 		t.Error("AppStateSyncComplete for an unrelated collection (regular) scheduled a contacts sync")
 	}
 }
+
+// TestHandleEventRetryReceiptLeavesATrace is the regression test for the
+// real incident (ct-2026-08-07): a real contact received an undecryptable
+// message from the gateway and nobody found out until she sent a
+// screenshot a day later. types.ReceiptTypeRetry is WhatsApp telling the
+// sender exactly that ("delivered to the device, but decrypting failed")
+// — this confirms the gateway now logs it instead of silently dropping it
+// in handleEvent's switch.
+func TestHandleEventRetryReceiptLeavesATrace(t *testing.T) {
+	a := newTestAdapter()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	a.handleEvent(&events.Receipt{
+		MessageSource: types.MessageSource{Chat: types.NewJID("555000001", "s.whatsapp.net")},
+		MessageIDs:    []types.MessageID{"MSGID-UNDECRYPTABLE"},
+		Type:          types.ReceiptTypeRetry,
+	})
+
+	got := buf.String()
+	if !strings.Contains(got, "555000001") || !strings.Contains(got, "MSGID-UNDECRYPTABLE") {
+		t.Errorf("retry receipt log = %q, want it to name the chat and the message id", got)
+	}
+	if !strings.Contains(got, "no se pudo descifrar") {
+		t.Errorf("retry receipt log = %q, want it to say plainly that decryption failed", got)
+	}
+}
+
+// TestHandleEventNonRetryReceiptStaysSilent guards the other half of the
+// contract: *events.Receipt fires for EVERY acknowledgment kind
+// (delivered, read, played...), not just retry — logging all of them would
+// bury the one signal that actually matters back in the same noise this
+// change exists to cut through.
+func TestHandleEventNonRetryReceiptStaysSilent(t *testing.T) {
+	for _, rt := range []types.ReceiptType{types.ReceiptTypeDelivered, types.ReceiptTypeRead, types.ReceiptTypeReadSelf, types.ReceiptTypePlayed, types.ReceiptTypeSender} {
+		t.Run(string(rt), func(t *testing.T) {
+			a := newTestAdapter()
+			var buf bytes.Buffer
+			orig := log.Writer()
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(orig) })
+
+			a.handleEvent(&events.Receipt{
+				MessageSource: types.MessageSource{Chat: types.NewJID("555000001", "s.whatsapp.net")},
+				MessageIDs:    []types.MessageID{"MSGID-OK"},
+				Type:          rt,
+			})
+
+			if got := buf.String(); got != "" {
+				t.Errorf("receipt type %q logged %q, want silence — only retry receipts should leave a trace", rt, got)
+			}
+		})
+	}
+}

@@ -57,8 +57,18 @@ func TestEmitBucketIsStricter(t *testing.T) {
 
 // TestCircuitBreakerBlocksAfterThreshold covers the circuit-breaker-style
 // temporary block requirement.
+//
+// ct-2026-08-07: pinned to a fixed clock (SetClock), same fix and same root
+// cause as TestFloodGuardThrottlesGeneralCalls (mcpserver) — this test
+// genuinely failed under heavy load in this session. Check's bucket refill
+// is real-elapsed-time-based; the 4 calls below must land within the SAME
+// instant from the bucket's point of view, which heavy scheduler
+// contention (external to this test, not something a local retry/margin
+// can bound) isn't guaranteed to hold.
 func TestCircuitBreakerBlocksAfterThreshold(t *testing.T) {
 	g := New(Config{RatePerMin: 1, EmitRatePerMin: 1, BlockThreshold: 3, BlockCooldown: time.Minute})
+	frozen := time.Now()
+	g.SetClock(func() time.Time { return frozen })
 	g.Check("flooder", false) // consumes the only token
 	for i := 0; i < 3; i++ {
 		g.Check("flooder", false) // throttled 3 times → trips the breaker

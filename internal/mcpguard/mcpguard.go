@@ -103,6 +103,7 @@ type Guard struct {
 	emitRatePerMin int
 	blockThreshold int
 	blockCooldown  time.Duration
+	now            func() time.Time
 
 	clients map[string]*clientEntry
 }
@@ -119,6 +120,7 @@ func New(cfg Config) *Guard {
 		emitRatePerMin: cfg.EmitRatePerMin,
 		blockThreshold: cfg.BlockThreshold,
 		blockCooldown:  cfg.BlockCooldown,
+		now:            time.Now,
 		clients:        make(map[string]*clientEntry),
 	}
 	if g.ratePerMin <= 0 {
@@ -144,10 +146,10 @@ func (g *Guard) Check(clientKey string, emit bool) Verdict {
 	if clientKey == "" {
 		clientKey = unknownKey
 	}
-	now := time.Now()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	now := g.now()
 
 	g.sweepLocked(now)
 
@@ -225,6 +227,22 @@ func (g *Guard) SetBlockThreshold(n int) {
 func (g *Guard) SetBlockCooldown(d time.Duration) {
 	g.mu.Lock()
 	g.blockCooldown = d
+	g.mu.Unlock()
+}
+
+// SetClock overrides Check's time source — test-only, production always
+// keeps New's default (time.Now). Exists because bucket.allow's refill is
+// elapsed-real-time-based: a test that calls Check a few times in a row
+// implicitly assumes those calls land close together in wall-clock time,
+// which heavy system load can violate by tens of seconds (ct-2026-08-07,
+// TestFloodGuardThrottlesGeneralCalls/TestCircuitBreakerBlocksAfterThreshold
+// flaky under load — a genuinely elapsed 30+ real seconds between two calls
+// on a RatePerMin:2 bucket legitimately refills a token, same as it would
+// in production). SetClock removes the dependency on real elapsed time
+// instead of gambling on scheduler timing.
+func (g *Guard) SetClock(now func() time.Time) {
+	g.mu.Lock()
+	g.now = now
 	g.mu.Unlock()
 }
 

@@ -6,7 +6,172 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
-## 0.1.8 — sin desplegar
+## Sin publicar
+
+---
+
+## 0.1.9 — 2026-08-08
+
+### Fixed
+- **Los mensajes salientes podían llegar imposibles de descifrar**
+  (ct-2026-08-07/08, caso real: un contacto real recibió un mensaje del
+  gateway y nunca le llegó el texto — WhatsApp le mostró "Esperando
+  mensaje" en su lugar, y nadie del lado del gateway se enteró hasta que
+  ella mandó una captura de pantalla un día después). Causa confirmada
+  leyendo la sesión real en modo solo-lectura: la cuenta **tiene** un LID
+  asignado pero `lid_migration_ts` está en **0** — con la versión de
+  whatsmeow que corría hasta ahora (`v0.0.0-20260709092057`), ese flag en
+  0 hacía que los mensajes directos se siguieran direccionando por
+  **número de teléfono** en vez del LID, aunque el destinatario ya
+  operara bajo esa identidad. El dispositivo del otro lado recibe el
+  sobre cifrado bajo una identidad para la que no tiene la sesión Signal
+  correcta y no puede abrirlo — el gateway lo registra como enviado
+  igual, sin ningún error visible. Arreglado actualizando whatsmeow a
+  `v0.0.0-20260806224404` — el commit `4f8f64e0dd21` ("send: always use
+  LID for DMs") saca esa condición y resuelve el LID del destinatario
+  siempre, sin depender de `lid_migration_ts`. Sin este flag corregido,
+  **cualquier mensaje saliente puede estar llegando ilegible**, no solo
+  el caso puntual detectado.
+- **Voseo en los manuales de `internal/mcpserver/manuals/`** (ct-2026-08-07).
+  Los sirve `get_manual` a cualquier agente de terceros que se conecte —
+  publicados en GitHub, es producto. A diferencia del instalador (que le
+  habla a una persona y pasó a usted), estos textos le hablan a un agente
+  IA: se mantuvo el **tuteo** que ya predominaba, solo se sacaron las
+  formas rioplatenses (`tenés`→`tienes`, `podés`→`puedes`,
+  `querés`→`quieres`, `fijate`→`fíjate`, `mirá`→`mira`, `acá`→`aquí`,
+  `vos`→`tú`, y variantes: `sos`→`eres`, `armás`→`armas`,
+  `seguís`→`sigues`, imperativos como `Encendé`/`Leé`/`Verificá` a su
+  forma tuteante). Tocados los 6 archivos con voseo real: `connect/
+  SKILL.md`, `operator/SKILL.md` y 4 de los 5 de `orchestrator/`
+  (`orchestrator/perillas.md` ya estaba limpio). Contenido intacto —
+  solo registro; el `dale`/`is_boss` del ejemplo de ataque inyectado
+  (bloque de código, `operator/SKILL.md`) no se tocó, es texto ilustrando
+  qué escribiría un atacante, no el manual hablándole al agente.
+  `internal/dashboard/web/` relevado aparte: sin problema real, lo que
+  parecía voseo eran comentarios de código (`acá`) y el texto de usuario
+  ya está en tuteo neutro, no rioplatense.
+- **`newTestWmeowClient` sin `SetMaxOpenConns(1)` en su base `:memory:`**
+  (`internal/whatsmeow/media_test.go`, hallado investigando un test
+  intermitente que resultó no venir de acá). Con el pool default
+  (ilimitado), cada conexión nueva a una SQLite `:memory:` es una base
+  vacía distinta — no explicaba el síntoma que se investigaba (ese
+  camino nunca toca `cli.Store`), pero era una trampa latente para el
+  próximo test que sí lo tocara concurrentemente. Alineado con
+  `store.Open` (`schema.go`), que ya usa el mismo `SetMaxOpenConns(1)`
+  por el mismo motivo.
+- **`TestAvatarWorkerLoopPacesRequestsWithVariableGaps` intermitente bajo
+  carga** (`internal/whatsmeow/avatar_test.go`, ct-2026-08-07 — este era
+  el test real detrás de la investigación anterior; el de media nunca
+  falló). Causa raíz confirmada por Citrino con el `--- FAIL` real bajo
+  40 corridas de la suite completa en paralelo: una separación medida en
+  29.4966ms contra un piso de 30ms — 0.5ms/1.7% corto. El código de
+  producción está sano (el worker durmió lo que tenía que dormir); lo
+  que erraba era la MEDICIÓN: el test observa cada dequeue por *polling*
+  de `len(a.avatarQueue)` cada 1ms, no por señal síncrona, y ese lag no
+  cancela simétricamente entre dos lecturas consecutivas — bajo carga,
+  sumado al scheduling de goroutines y la resolución del reloj de
+  Windows, el margen crece. Agregado `pacingMeasurementSlop` (2ms) solo
+  contra el piso `actionDelayMin`, documentado en el propio test como
+  error de instrumento y no permiso para que el pacing afloje. **Sin
+  tocar** la validación de que las separaciones son variables (nunca la
+  misma dos veces) — esa sigue exactamente igual de estricta. Verificado
+  con los números reales de Citrino (29.4966ms pasa con el margen nuevo;
+  un pacing genuinamente roto, 5ms o menos, sigue fallando) y con el
+  mismo método de reproducción bajo carga: 10 corridas completas de la
+  suite en paralelo (57-149s cada una en vez de los ~7s normales) más
+  intentos dedicados del test — sin una sola falla del test corregido.
+- **`TestControllerStopWaitsForInFlightOutboxSend` intermitente bajo carga**
+  (`internal/corepipeline/controller_test.go`, ct-2026-08-07 — reproducido
+  por Citrino con dos síntomas distintos: `outbox Send was never entered`
+  y `sql: database is closed`). **No es una carrera de producción** —
+  `Controller.Stop()`/`Pipeline.Run()` siguen uniendo `outboxLoop`
+  correctamente, reverificado bajo la misma carga. El bug estaba en el
+  propio test: a diferencia de los demás tests de este archivo, no tenía
+  un `defer c.Stop()` incondicional — si el primer `t.Fatal` (el timeout
+  de `sendStarted`, que bajo carga extrema puede tardar minutos en
+  cumplirse) disparaba, el `Goexit` saltaba directo por encima del
+  `c.Stop()` explícito de más abajo, dejando el Controller corriendo sin
+  parar mientras el `defer st.Close()` ya registrado cerraba la base — de
+  ahí el `database is closed` repetido, un `processOutbox` huérfano
+  reintentando cada 5ms contra una base cerrada. Arreglado con
+  `sync.OnceFunc`: el `defer` de limpieza y el `Stop()` explícito del
+  medio del test son ahora la MISMA llamada — cualquiera de los dos
+  caminos que dispare primero, el otro espera a que termine de verdad
+  (contrato propio de `sync.Once`), en vez de pisarlo con un no-op
+  idempotente. Reproducido de forma confiable con 15 corridas paralelas de
+  `go test ./...` (15/15 fallaban antes del fix) y verificado sin fallas
+  con el mismo método: 109 corridas dedicadas + las 15 corridas completas
+  de la suite, todas en verde, bajo la carga que antes lo hacía fallar
+  siempre.
+- **`TestFloodGuardThrottlesGeneralCalls` intermitente bajo carga**
+  (`internal/mcpserver/floodguard_test.go`, ct-2026-08-07 — visto fallar
+  por timeout, 30.8s, bajo carga pesada). **No es un bug del flood guard**
+  — su token bucket (`internal/mcpguard`) hace exactamente lo que tiene
+  que hacer: si pasan 30 segundos reales entre dos llamadas con
+  `RatePerMin: 2`, rellena un token, permite la siguiente y NO la
+  bloquea — es la defensa real funcionando, no rota. El test asumía que
+  sus 3 llamadas quedarían pegadas en el tiempo real, algo que ninguna
+  cantidad de reintentos locales puede garantizar bajo contención extrema
+  del scheduler del SO (a diferencia del de avatares, acá el retraso es
+  externo al test, no una imprecisión de su propia medición). Agregado
+  `Guard.SetClock` (`internal/mcpguard/mcpguard.go`) — inyecta la fuente
+  de tiempo de `Check`, test-only, producción sigue con `time.Now` por
+  default. El test ahora fija un reloj congelado: las 3 llamadas quedan
+  en el MISMO instante desde el punto de vista del bucket, sin depender
+  en absoluto del tiempo real transcurrido — a diferencia de los dos
+  flakies anteriores, esto no reduce la probabilidad de fallo bajo carga,
+  la elimina por completo (verificado con una prueba sintética: el mismo
+  bucket con reloj congelado ignora un `time.Sleep` real de 200ms entre
+  llamadas, y sigue rellenando correctamente si el reloj inyectado se
+  adelanta de verdad). **No logré reproducir esta falla específica hoy**
+  pese a ~100 corridas bajo dos tandas de carga creciente (hasta 25
+  suites completas en paralelo) — a diferencia de los casos anteriores,
+  esto no fue necesario para confiar en el arreglo: la aritmética del
+  token bucket es exacta, no probabilística, y confirmé el mismo
+  mecanismo de raíz en un test hermano (`TestCircuitBreakerBlocksAfterThreshold`,
+  `internal/mcpguard`) que sí falló bajo carga pesada en esta sesión.
+- **`TestCircuitBreakerBlocksAfterThreshold` — mismo arreglo** (`internal/
+  mcpguard/mcpguard_test.go`, ct-2026-08-07). Gemelo exacto del flaky de
+  `TestFloodGuardThrottlesGeneralCalls` de arriba — mismo `Guard.Check`
+  llamado varias veces seguidas sin control de reloj, y este SÍ se vio
+  fallar bajo carga real en esta sesión. Mismo `Guard.SetClock`, mismo
+  reloj congelado.
+  **Cierre de la serie de tests intermitentes** (T33, T19, T14, avatares,
+  corepipeline, flood guard, circuit breaker): de acá en más, se arregla
+  lo que falla en una corrida normal de la suite. Lo que solo aparece
+  forzando 20-25 corridas de `go test ./...` en paralelo (peleando por
+  CPU entre sí) no es un test roto — es un entorno que nadie usa; bajo
+  carga suficiente, cualquier test que toque tiempo real puede fallar, y
+  perseguir eso no tiene fondo. `TestControllerStopWaitsForInFlightOutboxSend`
+  (con su propio timeout de 2s, no la causa ya arreglada),
+  `TestControllerRunsPipelineEndToEnd` y `TestPrivilegedToolsRefuseNonBoss`
+  cayeron solo bajo esa carga extrema (25 suites en paralelo) — quedan
+  anotados, no perseguidos, hasta que alguno moleste en una corrida normal.
+
+### Added
+- **Rastro de mensajes ilegibles — `types.ReceiptTypeRetry`** (ct-2026-08-07,
+  caso real: un contacto real recibió un mensaje del gateway que le llegó
+  ilegible — WhatsApp le mostró "Esperando mensaje" en vez del texto — y
+  el gateway nunca se enteró; se supo un día después, por una captura de
+  pantalla). WhatsApp ya manda esta señal (`types.ReceiptTypeRetry`,
+  documentado por la propia librería: *"the message was delivered to the
+  device, but decrypting the message failed"*) y whatsmeow ya la
+  despachaba como `*events.Receipt` — el switch de `handleEvent`
+  (`inbound.go`) nunca tenía un caso para `*events.Receipt`, así que se
+  perdía en silencio. Ahora deja un log claro (`whatsmeow: mensaje a
+  %s (id %s) llegó al dispositivo pero no se pudo descifrar...`) filtrado
+  a **solo** el tipo retry — `*events.Receipt` llega para todo tipo de
+  acuse (entregado, leído, reproducido), y logueoar los demás habría
+  vuelto a esconder la señal real en ruido. **Solo observa — no reintenta,
+  no reenvía, no cambia el direccionamiento del envío.** Esa decisión
+  (actualizar whatsmeow, rama `whatsmeow-update-prep` aparte) es de
+  Citrino/el boss. No se persiste contra la base: el schema de `messages`
+  no tiene una columna para esto hoy y agregar una es decisión de Citrino,
+  no tomada acá.
+
+---
+
+## 0.1.8 — 2026-08-07
 
 ### Fixed
 - **`onExit` del tray no cerraba nada** (ct-2026-08-07). El segundo callback
@@ -404,7 +569,11 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
-## En curso (sin desplegar)
+## Histórico sin versión asignada
+
+Entradas anteriores a que el proyecto empezara a publicar releases. Salieron
+en alguna versión entre 0.1.1 y 0.1.6, pero fijar cuál exactamente requeriría
+el commit-corte de cada una — no adivinado, queda sin asignar.
 
 ### Changed
 - **T31** (`ct-2026-08-06-0244`, decisión del boss, revierte S10 —

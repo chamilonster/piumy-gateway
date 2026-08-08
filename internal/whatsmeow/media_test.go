@@ -37,6 +37,11 @@ func newTestWmeowClient(t *testing.T) *wmeow.Client {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// Same reasoning as store.Open (schema.go): a SQLite ":memory:" DB is
+	// per-connection, not per-DSN — without this, database/sql's default
+	// unlimited pool can hand out a second connection that sees an empty
+	// database, not the one Upgrade/GetFirstDevice just populated.
+	db.SetMaxOpenConns(1)
 	container := sqlstore.NewWithDB(db, "sqlite", waLog.Noop)
 	if err := container.Upgrade(ctx); err != nil {
 		t.Fatal(err)

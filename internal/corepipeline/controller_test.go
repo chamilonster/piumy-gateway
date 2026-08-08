@@ -2,6 +2,7 @@ package corepipeline
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,6 +89,26 @@ func TestControllerMarkReadNoOpWhenNotRunning(t *testing.T) {
 // sendStarted channel now signals the INSTANT Send is entered, so the test
 // waits on a real event instead of guessing a duration — deterministic,
 // no production code changed (Run/Stop's join was already correct).
+//
+// ct-2026-08-07, second flake (Citrino reproduced under 40 parallel full-
+// suite runs, two different symptoms — "outbox Send was never entered" and
+// "sql: database is closed"): NOT a production race — Run/Stop's join is
+// still correct (re-verified: WaitGroup + happens-before hold under the
+// exact same heavy-load reproduction). The bug was here, in this test's own
+// cleanup. Before this fix, `c` was only ever Stop()ed by the explicit
+// goroutine at the bottom — if either of the FIRST two t.Fatal calls fired
+// (the "Send was never entered" timeout, extended under load to a couple
+// hundred seconds by 15 parallel `go test ./...` runs competing for CPU),
+// t.Fatal's Goexit unwound straight past that goroutine, which never ran:
+// the Controller kept running, un-stopped, its outboxLoop still ticking
+// every 5ms against a store the deferred st.Close() (registered earlier)
+// closed out from under it — hence the repeated "database is closed".
+// stopOnce (sync.OnceFunc) makes the deferred cleanup below the SAME
+// underlying call as the explicit mid-test Stop(): whichever goroutine
+// calls it, every OTHER caller blocks until that one real Stop() finishes
+// (sync.Once's own documented contract) — so the deferred call actually
+// joins outboxLoop instead of racing an already-idempotent no-op, on every
+// exit path including an early t.Fatal.
 func TestControllerStopWaitsForInFlightOutboxSend(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "piumy.db"))
 	if err != nil {
@@ -117,6 +138,17 @@ func TestControllerStopWaitsForInFlightOutboxSend(t *testing.T) {
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
+	stopped := make(chan struct{})
+	stopOnce := sync.OnceFunc(func() {
+		c.Stop()
+		close(stopped)
+	})
+	// Runs on EVERY exit path, including an early t.Fatal below — never
+	// leaves the Controller running past this test function, whatever
+	// triggered the return. Registered after defer st.Close() above, so it
+	// unwinds first (LIFO): Stop() always joins outboxLoop before the store
+	// closes.
+	defer stopOnce()
 
 	// Wait for outboxLoop to actually be blocked inside gw.Send's artificial
 	// delay before we try to stop it — a real event, not a timing guess.
@@ -126,11 +158,7 @@ func TestControllerStopWaitsForInFlightOutboxSend(t *testing.T) {
 		t.Fatal("outbox Send was never entered")
 	}
 
-	stopped := make(chan struct{})
-	go func() {
-		c.Stop()
-		close(stopped)
-	}()
+	go stopOnce()
 
 	select {
 	case <-stopped:

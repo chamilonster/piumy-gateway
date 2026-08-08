@@ -1300,7 +1300,20 @@ la única capa que orquesta este sweep.
 - `handleEvent` — el único `AddEventHandler` registrado (en `New`);
   despacha `*events.Connected` / `*events.Message` / `*events.HistorySync`
   (`go handleHistorySync`, ct-2026-07-19-0148 — ver `history.go` abajo) /
-  los 5 eventos de desconexión de abajo (H6 hardening, ct-2026-07-10-0540).
+  los 5 eventos de desconexión de abajo (H6 hardening, ct-2026-07-10-0540) /
+  `*events.Receipt` con `Type == types.ReceiptTypeRetry` → `handleRetryReceipt`
+  (ver abajo).
+- **`handleRetryReceipt(evt)`** (ct-2026-08-07, caso real: un mensaje
+  nuestro llegó ilegible a un contacto y el gateway nunca se enteró hasta
+  una captura de pantalla un día después) — `types.ReceiptTypeRetry` es
+  la señal de whatsmeow para "llegó al dispositivo, no se pudo descifrar".
+  Solo loguea (un `log.Printf` por `MessageIDs`, con el chat y el id) —
+  no reintenta, no reenvía, no toca el direccionamiento del envío.
+  `*events.Receipt` llega para TODO tipo de acuse (entregado, leído,
+  reproducido); `handleEvent` filtra por `Type` ANTES de llamar a esta
+  función, así que solo el caso retry deja rastro — el resto no genera
+  ruido. No persiste contra `messages` (el schema no tiene columna para
+  esto hoy).
 - `handleConnected` — `clearErrorState()` (limpia el mood "error"
   display-only, ver abajo) + `recordOwnIdentity()` (`OwnJID`/`OwnName` en
   `state` + `markOwner`, ver abajo) + dispara `go syncContacts(context())`

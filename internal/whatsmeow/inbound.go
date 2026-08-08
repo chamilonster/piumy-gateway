@@ -68,6 +68,20 @@ func (a *Adapter) handleEvent(evt any) {
 		// name="" en GET /api/status. Escuchar PushNameSetting
 		// refresca el estado cuando el nombre finalmente llega.
 		a.recordOwnIdentity()
+	case *events.Receipt:
+		// ct-2026-08-07, caso real: un contacto real recibió un mensaje
+		// nuestro ilegible (WhatsApp le mostró "Esperando mensaje" en vez
+		// del texto) y el gateway nunca se enteró — se supo un día
+		// después, por una captura de pantalla. types.ReceiptTypeRetry es
+		// exactamente esta señal (documentado por la propia librería: "the
+		// message was delivered to the device, but decrypting the message
+		// failed") y whatsmeow ya la despachaba antes de este cambio —
+		// solo faltaba escucharla. *events.Receipt llega para TODO tipo de
+		// acuse (entregado, leído, etc.); filtrar acá evita convertir esto
+		// en el mismo ruido que hoy nos esconde la señal real.
+		if v.Type == types.ReceiptTypeRetry {
+			a.handleRetryReceipt(v)
+		}
 	case *events.AppStateSyncComplete:
 		// ct-2026-07-31 ("no llegan contactos en una instalación nueva"):
 		// whatsmeow fires this once a given app-state collection finishes a
@@ -496,6 +510,20 @@ func (a *Adapter) handleMessage(evt *events.Message) {
 	case a.inbound <- inb:
 	default:
 		log.Printf("whatsmeow: inbound buffer full, dropping message chat=%s id=%s", inb.ChatJID, inb.MsgID)
+	}
+}
+
+// handleRetryReceipt leaves a plain-language trace when a message WE sent
+// reached the recipient's device but couldn't be decrypted there — today
+// the only observable signal for this (ct-2026-08-07). Log-only, on
+// purpose: this does not retry, resend, or change how messages are
+// addressed — that decision (whether/when to update whatsmeow's LID
+// handling) belongs to Citrino/the boss, not this handler. One line per
+// affected message id, same "whatsmeow: ..." style as the rest of this
+// file's logging.
+func (a *Adapter) handleRetryReceipt(evt *events.Receipt) {
+	for _, id := range evt.MessageIDs {
+		log.Printf("whatsmeow: mensaje a %s (id %s) llegó al dispositivo pero no se pudo descifrar — WhatsApp pidió reenvío (retry receipt)", evt.Chat, id)
 	}
 }
 
