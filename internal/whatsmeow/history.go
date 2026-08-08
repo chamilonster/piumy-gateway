@@ -262,7 +262,7 @@ func (a *Adapter) persistHistoryMessage(evt *events.Message) {
 	// works here too even though ParseWebMessage never sets AddressingMode/
 	// SenderAlt/RecipientAlt (only GetPNForLID's fallback ever fires for
 	// history, see resolveChatJID's own doc).
-	chatJID := a.resolveChatJID(evt.Info).String()
+	chatJID := a.resolveChatJID(evt.Info.MessageSource).String()
 	msgID := string(evt.Info.ID)
 	m, isMedia := detectMedia(evt)
 	if isMedia {

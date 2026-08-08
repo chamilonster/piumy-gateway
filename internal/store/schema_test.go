@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -34,6 +35,59 @@ func TestOpenCreatesSchemaAndIsIdempotent(t *testing.T) {
 	}
 	if err := s2.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+// TestMigrateAddsDecryptRetryAtToExistingMessagesTable is the DoD regression
+// for T35 (ct-2026-08-08-1258): CREATE TABLE IF NOT EXISTS is a no-op on a
+// messages table that already exists — it never adds a new column. The real
+// case is the owner's live install, not a fresh DB, so this hand-creates
+// messages WITHOUT decrypt_retry_at (the pre-T35 shape) before Open() ever
+// runs, then checks migrate() backfilled the column onto that existing table
+// and both writing (MarkDecryptRetry) and reading (GetMessages) it work.
+func TestMigrateAddsDecryptRetryAtToExistingMessagesTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "piumy.db")
+
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE messages (
+		chat_jid TEXT    NOT NULL,
+		id       TEXT    NOT NULL,
+		from_me  INTEGER NOT NULL,
+		sender   TEXT,
+		text     TEXT,
+		ts       INTEGER NOT NULL,
+		type     TEXT,
+		handled  INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (chat_jid, id)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO messages (chat_jid, id, from_me, text, ts) VALUES (?, ?, ?, ?, ?)`,
+		"555000001@s.whatsapp.net", "wamid-pre", 1, "ya estaba antes de la migración", 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on a pre-existing messages table without decrypt_retry_at: %v", err)
+	}
+	defer s.Close()
+
+	if err := s.MarkDecryptRetry("555000001@s.whatsapp.net", "wamid-pre", 999); err != nil {
+		t.Fatalf("MarkDecryptRetry after migration: %v", err)
+	}
+	msgs, err := s.GetMessages("555000001@s.whatsapp.net", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].DecryptRetryAt != 999 {
+		t.Errorf("got %+v, want one pre-existing message with decrypt_retry_at=999 after migrate+mark", msgs)
 	}
 }
 

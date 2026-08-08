@@ -534,6 +534,14 @@ Piumy. Ver `docs/F1A-STORE-ACCESO.md`.
 **Mensajes** (`message.go`)
 - `AddMessage(Message)` — dedup por PK (chat_jid, id).
 - `SetDelivered/SetRead(chatJID, id, ts)` — receipts.
+- `MarkDecryptRetry(chatJID, id, ts)` (T35, ct-2026-08-08-1258) — marca la
+  columna `decrypt_retry_at`: la señal de que un mensaje que ENVIAMOS llegó
+  al dispositivo del destinatario pero no se pudo descifrar (WhatsApp lo
+  avisa con un retry receipt). Antes solo se logueaba (`log.Printf`, invisible
+  en producción — sin archivo de log, `-H windowsgui` sin consola); ahora
+  además queda persistida y expuesta en `GET /api/messages`
+  (`decrypt_retry_at`). No tocar una fila que no existe no es error — nada
+  que marcar. Cableada nil-safe desde `whatsmeow.handleRetryReceipt`.
 - `LastMessage/LastOutboundModel(chatJID)`
 - `GetMessages(jid, limit)`
 - `ChatJIDsWithMessages() (map[string]bool, error)` (ct-2026-07-19-1801, S1g;
@@ -1448,6 +1456,17 @@ la única capa que orquesta este sweep.
   sin mapeo todavía → el `@lid` crudo, nunca se pierde el chat.
   **No migra** los 557 pares ya duplicados — eso queda aparte, con OK
   explícito del boss.
+  **`resolveChatJID(src types.MessageSource)` (T36, ct-2026-08-08-1312) —
+  firma bajada de `types.MessageInfo` a `types.MessageSource`**, el struct
+  que `MessageInfo` embebe y que `events.Receipt` embebe también
+  (`parseMessageSource` arma los dos igual, whatsmeow). El cuerpo no cambió
+  — solo usa campos que ya vivían en `MessageSource`. Motivo: un retry
+  receipt llega con el mismo `Chat` `@lid` sin resolver que un mensaje —
+  `handleRetryReceipt` marcaba con `evt.Chat` crudo, así que la marca nunca
+  encontraba la fila de un chat LID (guardada bajo el número por
+  `resolveChatJID`). Ahora `handleMessage`, `persistHistoryMessage`
+  (`history.go`) y `handleRetryReceipt` (`MarkDecryptRetry`, T35) llaman a
+  la MISMA función — el guardado y la marca no pueden volver a divergir.
 - **"Muerte silenciosa" (H6 hardening, ct-2026-07-10-0540):** antes,
   `handleEvent` solo cubría `Connected`/`Message` — una sesión deauth/
   baneada/reemplazada desaparecía sin señal (un solo log crudo de la
@@ -4670,9 +4689,25 @@ es un paso aparte, conjunto con el boss (no en `main.go`).
   dashboardURL)` reemplaza el antiguo `<-ctx.Done()` desnudo, misma capa
   (`package main`, junto a `main.go`), build-tag gated:
   - `tray_windows.go` (`//go:build windows`): ícono real vía `fyne.io/systray`
-    (menú "Abrir dashboard"/"Salir"). Verificado CGO-free en Windows ANTES
-    de agregarlo (`CGO_ENABLED=0 go build` con un check descartable — su
-    único archivo cgo es `systray_darwin.go`, nunca compilado acá).
+    (menú: versión (deshabilitado) / "Abrir dashboard" / "Salir"). Verificado
+    CGO-free en Windows ANTES de agregarlo (`CGO_ENABLED=0 go build` con un
+    check descartable — su único archivo cgo es `systray_darwin.go`, nunca
+    compilado acá).
+    **Ítem de versión (T37, ct-2026-08-08-1433, pedido del dueño: "quiero
+    que el tray diga la version de piumy"):** primer ítem del menú,
+    `systray.AddMenuItem("Piumy Gateway "+version.Version, ...)` seguido de
+    `.Disable()` — se ve, no se puede clickear. Fuente única `version.Version`
+    (`internal/version`), nunca escrito a mano. Acotado después por el dueño,
+    verbatim ("en el tray en el menú, no al pasar el mouse"): **el tooltip y
+    el título (`SetTooltip`/`SetTitle`) quedan sin tocar**, `"Piumy Gateway"`
+    pelado — solo el menú lleva el número. Verificado con los ojos en el
+    binario real de Windows (`-H windowsgui`), no solo con el build: instancia
+    aislada (DB/sesión whatsmeow/puertos propios, nunca la instalación viva
+    del dueño), ícono ubicado por su propio `RuntimeId` (UI Automation, nunca
+    coordenadas de píxel — dos íconos "Piumy Gateway" idénticos conviven
+    mientras dura la prueba, uno es el del dueño), menú abierto e items
+    leídos + capturados en pantalla: `Piumy Gateway 0.1.9` (deshabilitado),
+    `Abrir dashboard`, `Salir`.
     "Salir" y `ctx.Done()` externo (Ctrl+C) convergen al mismo `stop()` +
     `systray.Quit()` — un solo camino de shutdown, no dos.
     **`onExit` (ct-2026-08-07):** el segundo callback de `systray.Run`

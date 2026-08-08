@@ -17,6 +17,10 @@ type Message struct {
 	// DeliveredTS / ReadTS are WhatsApp receipt timestamps; 0 = no receipt yet.
 	DeliveredTS int64 `json:"delivered_ts,omitempty"`
 	ReadTS      int64 `json:"read_ts,omitempty"`
+	// DecryptRetryAt (T35, ct-2026-08-08-1258): unix ts of the last WhatsApp
+	// retry receipt for THIS outbound message — the device that received it
+	// couldn't decrypt it. 0 = no such receipt. See MarkDecryptRetry.
+	DecryptRetryAt int64 `json:"decrypt_retry_at,omitempty"`
 
 	// QuotedID/QuotedPreview/Forwarded (ct-2026-07-21-1610, S6a): reply and
 	// forward metadata read from the vendor's ContextInfo at ingestion time
@@ -56,9 +60,19 @@ func (s *Store) SetRead(chatJID, id string, ts int64) error {
 	return err
 }
 
+// MarkDecryptRetry records that a WhatsApp retry receipt came back for a
+// message WE sent — the recipient's device got it but couldn't decrypt it
+// (T35, ct-2026-08-08-1258). The receipt names a message ID we may or may
+// not have persisted (e.g. one sent before this feature existed); an UPDATE
+// that touches no row is simply nothing to mark, not an error.
+func (s *Store) MarkDecryptRetry(chatJID, msgID string, ts int64) error {
+	_, err := s.db.Exec(`UPDATE messages SET decrypt_retry_at = ? WHERE chat_jid = ? AND id = ?`, ts, chatJID, msgID)
+	return err
+}
+
 const messageColumns = `chat_jid, id, from_me, COALESCE(sender,''),
 	COALESCE(text,''), ts, COALESCE(type,''), COALESCE(model,''), delivered_ts, read_ts,
-	COALESCE(quoted_id,''), COALESCE(quoted_preview,''), forwarded`
+	COALESCE(quoted_id,''), COALESCE(quoted_preview,''), forwarded, decrypt_retry_at`
 
 func scanMessages(rows *sql.Rows) ([]Message, error) {
 	defer rows.Close()
@@ -68,7 +82,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		var fromMe, forwarded int
 		if err := rows.Scan(&m.ChatJID, &m.ID, &fromMe, &m.Sender, &m.Text, &m.TS, &m.Type,
 			&m.Model, &m.DeliveredTS, &m.ReadTS,
-			&m.QuotedID, &m.QuotedPreview, &forwarded); err != nil {
+			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt); err != nil {
 			return nil, err
 		}
 		m.FromMe = fromMe != 0
@@ -86,7 +100,7 @@ func (s *Store) LastMessage(chatJID string) (m Message, ok bool, err error) {
 	err = s.db.QueryRow(`SELECT `+messageColumns+`
 		FROM messages WHERE chat_jid = ? ORDER BY ts DESC, rowid DESC LIMIT 1`, chatJID).
 		Scan(&m.ChatJID, &m.ID, &fromMe, &m.Sender, &m.Text, &m.TS, &m.Type, &m.Model, &m.DeliveredTS, &m.ReadTS,
-			&m.QuotedID, &m.QuotedPreview, &forwarded)
+			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt)
 	if err == sql.ErrNoRows {
 		return Message{}, false, nil
 	}

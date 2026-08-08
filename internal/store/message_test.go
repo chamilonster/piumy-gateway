@@ -114,6 +114,33 @@ func TestChatJIDsWithMessages(t *testing.T) {
 	}
 }
 
+// TestMarkDecryptRetry covers T35 (ct-2026-08-08-1258): the retry-receipt
+// signal must persist on the message row, and marking an id we never stored
+// (e.g. a message sent before this feature existed) must be a silent no-op,
+// not an error — MarkDecryptRetry's own doc.
+func TestMarkDecryptRetry(t *testing.T) {
+	s := openTestStore(t)
+	m := Message{ChatJID: "555000001@s.whatsapp.net", ID: "wamid-1", FromMe: true, Text: "hola", TS: 100}
+	if err := s.AddMessage(m); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	if err := s.MarkDecryptRetry("555000001@s.whatsapp.net", "wamid-1", 200); err != nil {
+		t.Fatalf("MarkDecryptRetry: %v", err)
+	}
+	last, ok, err := s.LastMessage("555000001@s.whatsapp.net")
+	if err != nil || !ok {
+		t.Fatalf("LastMessage: ok=%v err=%v", ok, err)
+	}
+	if last.DecryptRetryAt != 200 {
+		t.Errorf("got decrypt_retry_at=%d, want 200", last.DecryptRetryAt)
+	}
+
+	if err := s.MarkDecryptRetry("555000001@s.whatsapp.net", "no-existe", 300); err != nil {
+		t.Errorf("MarkDecryptRetry on unknown id: %v, want nil (no row touched is not an error)", err)
+	}
+}
+
 // TestChatJIDsWithMessagesExcludesEmptyContentAndStatusBroadcast is the
 // regression test for ct-2026-07-29 (boss: "las conversaciones son muchas
 // por el grupo... mis conversaciones reales son como 4 nada más"). Measured

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS messages (
   ts       INTEGER NOT NULL,
   type     TEXT,
   handled  INTEGER NOT NULL DEFAULT 0,
+  decrypt_retry_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (chat_jid, id)
 );
 CREATE TABLE IF NOT EXISTS outbox (
@@ -219,6 +220,13 @@ var columnMigrations = []string{
 	// redispatch, not as something the agent has to fetch separately.
 	`ALTER TABLE drafts ADD COLUMN round INTEGER NOT NULL DEFAULT 1`,
 	`ALTER TABLE drafts ADD COLUMN reject_reason TEXT`,
+	// T35 (ct-2026-08-08-1258): decrypt_retry_at persists the one observable
+	// signal that a message WE sent reached the recipient's device but
+	// couldn't be decrypted there (WhatsApp's retry receipt — see
+	// whatsmeow.handleRetryReceipt). Before this it was log.Printf-only,
+	// invisible in production (no log file, -H windowsgui has no console) —
+	// the exact defect this migration fixes.
+	`ALTER TABLE messages ADD COLUMN decrypt_retry_at INTEGER NOT NULL DEFAULT 0`,
 }
 
 // confirmationModeMigration adds chats.confirmation_mode with a flat

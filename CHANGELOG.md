@@ -10,6 +10,40 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.10 — 2026-08-08
+
+### Fixed
+- **La señal de "no se pudo descifrar" quedaba solo en un log que nadie ve
+  en producción** (T35, ct-2026-08-08-1258). `handleRetryReceipt` detecta
+  correctamente el retry receipt de WhatsApp (la única señal observable de
+  que un mensaje nuestro llegó ilegible al destinatario, ver 0.1.9 más
+  abajo), pero antes solo hacía `log.Printf` — sin `log.SetOutput` a
+  archivo y compilado `-H windowsgui` (sin consola), esa línea se tiraba.
+  Ahora la señal se persiste (`messages.decrypt_retry_at`, columna nueva)
+  y se puede consultar desde `GET /api/messages`, no solo verse por
+  casualidad en una captura de pantalla del contacto. **(T36,
+  ct-2026-08-08-1312)** Ese primer arreglo tenía un hueco que le pegaba
+  justo al caso real que originó todo: para un chat bajo LID, el mensaje se
+  guarda con el chat_jid ya resuelto a número (`resolveChatJID`), pero la
+  marca buscaba por el `@lid` crudo del receipt — no encontraba la fila y,
+  como cero filas no es error, fallaba en silencio, otra vez. `handleMessage`
+  y `handleRetryReceipt` ahora resuelven el chat_jid con la misma función
+  (`resolveChatJID`, bajada a `types.MessageSource` para servir a los dos),
+  así el guardado y la marca no pueden volver a divergir.
+
+### Added
+- **La versión de piumy-gateway ahora se ve desde el tray** (T37,
+  ct-2026-08-08-1433, pedido del dueño: "quiero que el tray diga la version
+  de piumy"). Piumy corre sin ventana (`-H windowsgui`) — el ícono del tray
+  es lo único visible del proceso, y hasta ahora no había forma de saber qué
+  versión estaba corriendo sin abrir el dashboard. El menú del ícono ahora
+  trae, como primer ítem y deshabilitado, `Piumy Gateway <versión>` —
+  leído de `internal/version.Version`, la fuente única (nunca escrito a
+  mano). El tooltip/título del ícono quedan sin tocar, a pedido explícito
+  del dueño ("en el tray en el menú, no al pasar el mouse").
+
+---
+
 ## 0.1.9 — 2026-08-08
 
 ### Fixed

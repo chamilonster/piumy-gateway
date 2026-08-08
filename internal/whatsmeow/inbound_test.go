@@ -156,7 +156,7 @@ func TestResolveChatJIDUsesSenderAltForRealInbound(t *testing.T) {
 		SenderAlt:      number,
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	if got.String() != number.ToNonAD().String() {
 		t.Errorf("resolveChatJID = %s, want %s (resolved via SenderAlt)", got, number.ToNonAD())
 	}
@@ -182,7 +182,7 @@ func TestResolveChatJIDResolvesRealBossMessageWithEmptyAddressingMode(t *testing
 		IsGroup:        false,
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	want := "55500000044@s.whatsapp.net"
 	if got.String() != want {
 		t.Errorf("resolveChatJID (real boss message, empty addressing_mode) = %s, want %s — the JID-identity gate must resolve this regardless of AddressingMode", got, want)
@@ -211,7 +211,7 @@ func TestResolveChatJIDUsesRecipientAltForFromMe(t *testing.T) {
 		RecipientAlt:   contactNumber,
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	if got.String() != contactNumber.ToNonAD().String() {
 		t.Errorf("resolveChatJID(from_me) = %s, want %s (RecipientAlt) — got the gateway's own number if this is %s", got, contactNumber.ToNonAD(), gatewayOwnNumber.ToNonAD())
 	}
@@ -232,7 +232,7 @@ func TestResolveChatJIDFallsBackToGetPNForLID(t *testing.T) {
 		Chat: lid, Sender: lid, AddressingMode: types.AddressingModeLID,
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	if got.String() != number.ToNonAD().String() {
 		t.Errorf("resolveChatJID (DB fallback) = %s, want %s", got, number.ToNonAD())
 	}
@@ -249,7 +249,7 @@ func TestResolveChatJIDFallsBackToRawJIDWhenUnresolved(t *testing.T) {
 		Chat: lid, Sender: lid, AddressingMode: types.AddressingModeLID,
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	if got.String() != lid.String() {
 		t.Errorf("resolveChatJID (unresolved) = %s, want the raw @lid %s unchanged", got, lid)
 	}
@@ -267,7 +267,7 @@ func TestResolveChatJIDNeverTouchesGroups(t *testing.T) {
 		SenderAlt: types.NewJID("55500000013", "s.whatsapp.net"),
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	if got.String() != group.String() {
 		t.Errorf("resolveChatJID (group) = %s, want the group JID %s untouched", got, group)
 	}
@@ -285,7 +285,7 @@ func TestResolveChatJIDSkipsAlreadyNumberJID(t *testing.T) {
 		Chat: number, Sender: number, AddressingMode: types.AddressingModePN,
 	}}
 
-	got := a.resolveChatJID(info)
+	got := a.resolveChatJID(info.MessageSource)
 	if got.String() != number.String() {
 		t.Errorf("resolveChatJID (already a number JID) = %s, want %s untouched", got, number)
 	}
@@ -1095,6 +1095,119 @@ func TestHandleEventRetryReceiptLeavesATrace(t *testing.T) {
 	}
 	if !strings.Contains(got, "no se pudo descifrar") {
 		t.Errorf("retry receipt log = %q, want it to say plainly that decryption failed", got)
+	}
+}
+
+// TestHandleRetryReceiptPersistsToStore is T35's own regression
+// (ct-2026-08-08-1258): the retry receipt must also reach
+// store.MarkDecryptRetry, not just leave the log trace
+// TestHandleEventRetryReceiptLeavesATrace already covers — a log with no
+// file/console in production (see MarkDecryptRetry's doc) was the exact
+// defect this fixes.
+func TestHandleRetryReceiptPersistsToStore(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "piumy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.AddMessage(store.Message{
+		ChatJID: "555000001@s.whatsapp.net", ID: "MSGID-UNDECRYPTABLE", FromMe: true, Text: "hola", TS: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{inbound: make(chan gateway.Inbound, 4), store: st}
+
+	a.handleEvent(&events.Receipt{
+		MessageSource: types.MessageSource{Chat: types.NewJID("555000001", "s.whatsapp.net")},
+		MessageIDs:    []types.MessageID{"MSGID-UNDECRYPTABLE"},
+		Type:          types.ReceiptTypeRetry,
+		Timestamp:     time.Unix(2000, 0),
+	})
+
+	msg, ok, err := st.LastMessage("555000001@s.whatsapp.net")
+	if err != nil || !ok {
+		t.Fatalf("LastMessage: ok=%v err=%v", ok, err)
+	}
+	if msg.DecryptRetryAt != 2000 {
+		t.Errorf("got decrypt_retry_at=%d, want 2000 — handleRetryReceipt must persist, not just log", msg.DecryptRetryAt)
+	}
+}
+
+// TestHandleRetryReceiptMarksLIDChatSavedViaSenderAlt is T36's own
+// regression (ct-2026-08-08-1312): the exact case that started this whole
+// chain — a real contact operating under LID whose message came back
+// undecryptable. handleMessage resolves an inbound LID chat's ChatJID via
+// resolveChatJID (SenderAlt, since it's not from_me) BEFORE the row is ever
+// saved — that resolved number is what corepipeline.sentMessageRow later
+// files an outbound reply under too (item.ToJID == chats.jid, established
+// by that same resolution). But handleRetryReceipt (pre-fix) marked using
+// evt.Chat.String() RAW — still @lid, never resolved — so the UPDATE never
+// matched the row saved under the number. Zero rows touched is "not an
+// error" by design (MarkDecryptRetry's own doc), so this failed SILENTLY.
+//
+// This test drives BOTH halves through their real entry points (handleMessage,
+// handleEvent) — not a hand-picked ChatJID handed to AddMessage — so it
+// actually exercises the divergence instead of assuming an answer: the
+// resolved ChatJID used to persist the sent-message row comes from
+// handleMessage's own output, and the mark comes from firing the real
+// receipt event through handleEvent.
+func TestHandleRetryReceiptMarksLIDChatSavedViaSenderAlt(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "piumy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a := &Adapter{inbound: make(chan gateway.Inbound, 4), store: st}
+
+	lid := types.NewJID("555000000000001", "lid")
+	number := types.NewJID("555000002", "s.whatsapp.net")
+	source := types.MessageSource{
+		Chat: lid, Sender: lid,
+		AddressingMode: types.AddressingModeLID,
+		SenderAlt:      number,
+	}
+
+	// Establishes the resolved ChatJID the real ingestion path computes for
+	// this LID contact (mirrors chats.jid, which item.ToJID later reuses to
+	// file an outbound reply — see sentMessageRow, corepipeline/outbox.go).
+	a.handleMessage(&events.Message{
+		Info:    types.MessageInfo{MessageSource: source, ID: "MSGID-LID-SENT"},
+		Message: &waE2E.Message{Conversation: proto.String("hola")},
+	})
+	var resolvedChatJID string
+	select {
+	case got := <-a.inbound:
+		resolvedChatJID = got.ChatJID
+	default:
+		t.Fatal("handleMessage did not push anything onto Inbound()")
+	}
+	if resolvedChatJID != number.ToNonAD().String() {
+		t.Fatalf("resolved ChatJID = %q, want the number %q — test setup is wrong, not the thing under test", resolvedChatJID, number.ToNonAD().String())
+	}
+
+	// The message WE sent back, filed under that same resolved chat_jid.
+	if err := st.AddMessage(store.Message{
+		ChatJID: resolvedChatJID, ID: "MSGID-LID-SENT", FromMe: true, Text: "hola", TS: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The retry receipt arrives with the SAME raw @lid Chat a live stanza
+	// would carry — receipts are never pre-resolved (parseMessageSource is
+	// shared with messages, T36's own verified evidence).
+	a.handleEvent(&events.Receipt{
+		MessageSource: source,
+		MessageIDs:    []types.MessageID{"MSGID-LID-SENT"},
+		Type:          types.ReceiptTypeRetry,
+		Timestamp:     time.Unix(2000, 0),
+	})
+
+	msg, ok, err := st.LastMessage(resolvedChatJID)
+	if err != nil || !ok {
+		t.Fatalf("LastMessage: ok=%v err=%v", ok, err)
+	}
+	if msg.DecryptRetryAt != 2000 {
+		t.Errorf("got decrypt_retry_at=%d, want 2000 — the receipt's raw @lid Chat must resolve to the same chat_jid the message was saved under", msg.DecryptRetryAt)
 	}
 }
 

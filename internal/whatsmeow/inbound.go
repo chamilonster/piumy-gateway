@@ -401,23 +401,33 @@ func (a *Adapter) ResolvePN(ctx context.Context, lidJID string) (string, error) 
 // touching the DB. "" (never resolved yet) falls back to the raw @lid JID —
 // a chat that would be saved today must never be lost because resolution
 // isn't available yet (contract's cuidado #1).
-func (a *Adapter) resolveChatJID(info types.MessageInfo) types.JID {
-	if info.IsGroup || info.Chat.Server != types.HiddenUserServer {
-		return info.Chat
+//
+// Takes types.MessageSource, not types.MessageInfo (T36, ct-2026-08-08-1312):
+// every field this reads (IsGroup/Chat/SenderAlt/IsFromMe/RecipientAlt) lives
+// in MessageSource, which events.Message.Info AND events.Receipt both embed
+// (parseMessageSource builds both the same way — receipt.go). handleMessage
+// and handleRetryReceipt call this SAME function so the chat_jid a message
+// is saved under and the chat_jid its retry receipt marks can never diverge
+// again — before this, handleRetryReceipt used evt.Chat raw (still @lid),
+// while the message it was trying to mark had been saved under the number
+// this function resolves to, so the UPDATE silently touched zero rows.
+func (a *Adapter) resolveChatJID(src types.MessageSource) types.JID {
+	if src.IsGroup || src.Chat.Server != types.HiddenUserServer {
+		return src.Chat
 	}
-	alt := info.SenderAlt
-	if info.IsFromMe {
-		alt = info.RecipientAlt
+	alt := src.SenderAlt
+	if src.IsFromMe {
+		alt = src.RecipientAlt
 	}
 	if alt.Server == types.DefaultUserServer && !alt.IsEmpty() {
 		return alt.ToNonAD()
 	}
 	if a.client == nil || a.client.Store == nil || a.client.Store.LIDs == nil {
-		return info.Chat
+		return src.Chat
 	}
-	pn, err := a.client.Store.LIDs.GetPNForLID(context.Background(), info.Chat)
+	pn, err := a.client.Store.LIDs.GetPNForLID(context.Background(), src.Chat)
 	if err != nil || pn.User == "" {
-		return info.Chat // not resolved yet — stays @lid, same as today
+		return src.Chat // not resolved yet — stays @lid, same as today
 	}
 	return pn.ToNonAD()
 }
@@ -454,7 +464,7 @@ func (a *Adapter) handleMessage(evt *events.Message) {
 		}
 	}
 
-	chatJID := a.resolveChatJID(evt.Info).String()
+	chatJID := a.resolveChatJID(evt.Info.MessageSource).String()
 	text := evt.Message.GetConversation()
 	if text == "" {
 		// Replies/quotes/link-preview messages arrive as ExtendedTextMessage
@@ -513,17 +523,32 @@ func (a *Adapter) handleMessage(evt *events.Message) {
 	}
 }
 
-// handleRetryReceipt leaves a plain-language trace when a message WE sent
-// reached the recipient's device but couldn't be decrypted there — today
-// the only observable signal for this (ct-2026-08-07). Log-only, on
-// purpose: this does not retry, resend, or change how messages are
+// handleRetryReceipt leaves a trace when a message WE sent reached the
+// recipient's device but couldn't be decrypted there — today the only
+// observable signal for this (ct-2026-08-07). It logs (dev-visible) AND
+// persists decrypt_retry_at on the store (T35, ct-2026-08-08-1258 — the log
+// alone never reaches production: no log file, -H windowsgui has no
+// console). Still does not retry, resend, or change how messages are
 // addressed — that decision (whether/when to update whatsmeow's LID
-// handling) belongs to Citrino/the boss, not this handler. One line per
-// affected message id, same "whatsmeow: ..." style as the rest of this
-// file's logging.
+// handling) belongs to Citrino/the boss, not this handler. Nil-safe: a.store
+// is optional (Config.Store), same convention as the rest of this file.
+//
+// chatJID goes through resolveChatJID (T36, ct-2026-08-08-1312), NOT
+// evt.Chat raw: a receipt's Chat arrives in the same unresolved @lid form a
+// message's does (see resolveChatJID's own doc) — using it raw meant the
+// mark could never match a message saved under the resolved number, the
+// exact case this whole feature exists for (a LID-addressed contact).
 func (a *Adapter) handleRetryReceipt(evt *events.Receipt) {
+	chatJID := a.resolveChatJID(evt.MessageSource).String()
+	ts := evt.Timestamp.Unix()
 	for _, id := range evt.MessageIDs {
-		log.Printf("whatsmeow: mensaje a %s (id %s) llegó al dispositivo pero no se pudo descifrar — WhatsApp pidió reenvío (retry receipt)", evt.Chat, id)
+		log.Printf("whatsmeow: mensaje a %s (id %s) llegó al dispositivo pero no se pudo descifrar — WhatsApp pidió reenvío (retry receipt)", chatJID, id)
+		if a.store == nil {
+			continue
+		}
+		if err := a.store.MarkDecryptRetry(chatJID, id, ts); err != nil {
+			log.Printf("whatsmeow: MarkDecryptRetry %s/%s: %v", chatJID, id, err)
+		}
 	}
 }
 

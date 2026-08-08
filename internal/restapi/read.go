@@ -720,6 +720,11 @@ type messageOut struct {
 	// message (from_me — the popup already knows who "us" is).
 	Sender     string `json:"sender,omitempty"`
 	SenderName string `json:"sender_name,omitempty"`
+	// DecryptRetryAt (T35, ct-2026-08-08-1258): unix ts of WhatsApp's last
+	// "no se pudo descifrar" retry receipt for this outbound message — 0/
+	// omitted when none arrived. store.Message.DecryptRetryAt verbatim; the
+	// visual indicator (icon/color) is the boss's call, not this endpoint's.
+	DecryptRetryAt int64 `json:"decrypt_retry_at,omitempty"`
 }
 
 // handleMessages returns a chat's recent messages, oldest first (a chat log
@@ -789,6 +794,7 @@ func (d Deps) handleMessages(w http.ResponseWriter, r *http.Request) {
 		mo := messageOut{
 			ID: m.ID, FromMe: m.FromMe, Text: m.Text, TS: m.TS,
 			QuotedPreview: m.QuotedPreview, Forwarded: m.Forwarded,
+			DecryptRetryAt: m.DecryptRetryAt,
 		}
 		if isGroup && !m.FromMe && m.Sender != "" {
 			mo.Sender = m.Sender
