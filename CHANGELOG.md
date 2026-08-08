@@ -10,6 +10,59 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.14 — 2026-08-08
+
+### Changed
+- **El manual del operador ahora enseña los flujos, no solo las herramientas**
+  (T48, ct-2026-08-08-2338, pedido del dueño: "la skill debe especificar flujos
+  de ejemplo, todos los flujos"). Se agregó un catálogo de los 16 flujos que un
+  agente operador puede vivir, cada uno con las llamadas concretas en orden:
+  desde el despacho normal hasta el borrador rechazado que vuelve con el motivo,
+  el aviso al dueño sin despacho, y la respuesta citada que regresa al agente que
+  la escribió.
+
+### Fixed
+- **Tres cosas que el manual del operador decía mal.** (1) El primer paso del
+  ritual estaba escrito como `get_instructions(chat_id)`, pero el parámetro real
+  es el `nonce` del despacho — un agente que seguía el manual al pie de la letra
+  erraba la primera llamada. (2) El manual declaraba que rechazar un borrador con
+  motivo y corregirlo "todavía no existe", cuando `reject_draft` y `edit_draft`
+  están construidas desde T15: un texto viejo mantenía muerta una función viva.
+  (3) El ritual se presentaba sin excepciones, pero un despacho del dueño está
+  exento del gate; ahora está dicho, para que ese comportamiento no se lea como
+  una falla.
+- **Los dos huecos que quedaban en el aviso "agente sin conexión"** (T47,
+  ct-2026-08-08-233459, encontrados por Citrino leyendo el código, uno de
+  ellos reproducido con un test antes de escribir el contrato).
+  - Un agente con antena configurada pero la máquina apagada o en otra red
+    reintentaba para siempre, en silencio — el aviso solo salía cuando no
+    había antena en absoluto. Ahora, pasados 60 segundos de canal caído,
+    el dueño recibe el aviso igual, y el mensaje sigue esperando al
+    agente (no se cierra) — un corte corto sigue sin generar ruido.
+  - Un burst con un mensaje normal seguido de un reply a un agente sin
+    conexión perdía el mensaje normal: el aviso cerraba el burst entero.
+    Ahora solo se cierra lo que efectivamente era la respuesta a ese
+    agente; el resto sigue pendiente y llega a destino en el siguiente
+    ciclo, como corresponde.
+
+---
+
+## 0.1.13 — 2026-08-08
+
+### Fixed
+- **Un reply ya no cae al principal en silencio cuando el agente citado no
+  tiene antena viva** (T44, ct-2026-08-08-2251, corrección de una decisión
+  de T43). Pedido del dueño, verbatim: "siempre que el boss responda a un
+  mensaje de agente is boss le llega a ese terminal, y si el mensaje no
+  llega, entonces que diga 'agente sin conexion'". Antes, si el agente
+  citado no tenía conexión en ese momento, la respuesta se la llevaba el
+  agente principal sin ningún aviso — parecía que había funcionado, y no.
+  Ahora el destino de un reply es siempre el agente citado; si no se le
+  puede entregar, el dueño recibe el mensaje automático `agente sin
+  conexión` en ese mismo chat, y no queda nada reintentando en círculo.
+
+---
+
 ## 0.1.12 — 2026-08-08
 
 ### Added

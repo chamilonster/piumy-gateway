@@ -848,7 +848,14 @@ func TestReplyToNonAgentMessageFallsBackToPrincipal(t *testing.T) {
 // message DOES have an OriginTerminalID, but that agent has no injector
 // registered (never connected, or connected and gone) — must fall back to
 // the principal, not strand the message on a dead terminal_id.
-func TestReplyToAgentWithoutLiveInjectorFallsBackToPrincipal(t *testing.T) {
+// TestReplyToAgentWithoutLiveInjectorNotifiesInsteadOfFallingBack is T44's
+// own test (ct-2026-08-08-2251), rewritten from T43's own version — T43 had
+// this case fall back to the principal, which is exactly the defect T44
+// corrects: boss verbatim "siempre que el boss responda a un mensaje de
+// agente is boss le llega a ese terminal, y si el mensaje no llega,
+// entonces que diga 'agente sin conexion'". A reply's destination is never
+// allowed to silently land somewhere else.
+func TestReplyToAgentWithoutLiveInjectorNotifiesInsteadOfFallingBack(t *testing.T) {
 	chat := "55500000034@c.us"
 	st, _, _, principal, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
 	// "ghost-term" is deliberately NEVER registered via RegisterInjector.
@@ -869,8 +876,191 @@ func TestReplyToAgentWithoutLiveInjectorFallsBackToPrincipal(t *testing.T) {
 
 	pusher.sweepOnce()
 
+	if principal.count() != 0 {
+		t.Errorf("principal injector was called %d times, want 0 — a reply must never fall back to the principal", principal.count())
+	}
+	pending, err := st.PendingOutbox(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("outbox pending = %d, want exactly 1 (the notice)", len(pending))
+	}
+	if pending[0].ToJID != chat {
+		t.Errorf("notice ToJID = %q, want %q (the chat the reply came from)", pending[0].ToJID, chat)
+	}
+	if pending[0].Text != "agente sin conexión" {
+		t.Errorf("notice text = %q, want exactly %q — verbatim del dueño, sin nombre ni firma", pending[0].Text, "agente sin conexión")
+	}
+	if pending[0].Model != "" || pending[0].OriginTerminalID != "" {
+		t.Errorf("notice Model=%q OriginTerminalID=%q, want both empty — es un mensaje automático de Piumy, no de un agente", pending[0].Model, pending[0].OriginTerminalID)
+	}
+}
+
+// TestReplyNoticeClosesTheBurst is T44's second required test: once the
+// "agente sin conexión" notice is queued, the burst that triggered it must
+// be marked handled — otherwise it re-triggers every sweep, queuing a fresh
+// notice each time (the exact "stuck message" the owner's installation
+// already has one of, per the contract).
+func TestReplyNoticeClosesTheBurst(t *testing.T) {
+	chat := "55500000035@c.us"
+	st, _, _, _, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+	// "ghost-term" is deliberately NEVER registered via RegisterInjector.
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out", FromMe: true, Text: "[Fantasma] ya no está", TS: 1, OriginTerminalID: "ghost-term"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply1", Text: "respondiendo al fantasma", TS: 2, QuotedID: "boss-out"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+	pusher.sweepOnce()
+
+	pending, err := st.PendingOutbox(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Errorf("outbox pending after 2 sweeps = %d, want still 1 — the burst must close, not re-notify every sweep", len(pending))
+	}
+}
+
+// TestNotifyUnreachableOnlyClosesTheReplyNotTheWholeBurst is T47 hueco 2's
+// own reproduction (ct-2026-08-08-233459): T44's version of
+// notifyAgentUnreachable closed the WHOLE burst with MarkHandledBefore —
+// silently swallowing a plain, non-reply message that happened to share the
+// burst with a reply to a dead agent. Reproduced by Citrino before writing
+// the contract: chat is_boss, "hola" (TS2, no citation, meant for the
+// principal) followed by a reply to a ghost agent (TS3) — the sweep
+// produced 0 principal calls and an empty PendingDedicated. The "hola" was
+// gone.
+func TestNotifyUnreachableOnlyClosesTheReplyNotTheWholeBurst(t *testing.T) {
+	chat := "55500000036@c.us"
+	st, _, _, principal, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+	// "ghost-term" is deliberately NEVER registered via RegisterInjector.
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out", FromMe: true, Text: "[Fantasma] ya no está", TS: 1, OriginTerminalID: "ghost-term"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "hola", Text: "hola, esto va al principal", TS: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply1", Text: "respondiendo al fantasma", TS: 3, QuotedID: "boss-out"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	pending, err := st.PendingDedicated(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != "hola" {
+		t.Fatalf("PendingDedicated tras el primer sweep = %v, want exactamente [hola] — el mensaje normal no se pierde", pending)
+	}
+	if principal.count() != 0 {
+		t.Fatalf("principal injector calls tras el primer sweep = %d, want 0 — 'hola' todavía no le tocaba, el reply se lleva el burst completo (T43, sin tocar)", principal.count())
+	}
+
+	// Sweep siguiente: sin el reply adelante, "hola" se enruta como
+	// corresponde — al principal, como cualquier mensaje boss-level normal.
+	pusher.sweepOnce()
+
 	if len(principal.calls) != 1 || principal.calls[0] != "port-fallback" {
-		t.Errorf("principal injector calls = %v, want exactly one to port-fallback — a reply to a departed agent must not get stranded", principal.calls)
+		t.Errorf("principal injector calls = %v, want exactamente uno a port-fallback — 'hola' debe llegarle al principal en el sweep siguiente", principal.calls)
+	}
+}
+
+// TestChannelDownPastThresholdNotifiesWithoutClosingTheBurst covers T47
+// hueco 1 (ct-2026-08-08-233459): an agent with a CONFIGURED antenna whose
+// machine is unreachable (Inject fails, as opposed to no antenna at all)
+// used to retry forever in total silence. Below channelDownNoticeThreshold
+// a blip must stay silent (the boss's own "resiliente si se corta 48
+// horas"); past it, exactly one notice goes out and the burst must NOT
+// close — the message keeps waiting for the agent to come back. Also
+// covers the third required test: the notice must not repeat every sweep
+// while the channel stays down.
+func TestChannelDownPastThresholdNotifiesWithoutClosingTheBurst(t *testing.T) {
+	chat := "55500000037@c.us"
+	st, _, _, _, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+	agentInj := &fakeInjector{}
+	agentInj.setErr(errors.New("dial tcp: connection refused"))
+	pusher.RegisterInjector("agent-term", agentInj)
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out", FromMe: true, Text: "[Agente] avisando algo", TS: 1, OriginTerminalID: "agent-term"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply1", Text: "respondiendo", TS: 2, QuotedID: "boss-out"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	pending0, err := st.PendingOutbox(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending0) != 0 {
+		t.Fatalf("outbox pending recién detectado el corte = %d, want 0 — un blip bajo el umbral no debe avisar", len(pending0))
+	}
+
+	// Simular que el corte ya lleva más de 60s — logTransition ya está
+	// "activo" desde el sweep anterior, así que recordChannelDown no vuelve
+	// a pisar este valor.
+	pusher.channelDownSince["agent-term"] = time.Now().Add(-61 * time.Second)
+
+	pusher.sweepOnce()
+
+	pending, err := st.PendingOutbox(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("outbox pending tras cruzar el umbral = %d, want exactamente 1 (el aviso)", len(pending))
+	}
+	if pending[0].ToJID != chat || pending[0].Text != "agente sin conexión" {
+		t.Errorf("aviso = %+v, want ToJID=%q Text=%q", pending[0], chat, "agente sin conexión")
+	}
+
+	inPending, err := st.PendingDedicated(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inPending) != 1 || inPending[0].ID != "reply1" {
+		t.Errorf("PendingDedicated tras el aviso = %v, want [reply1] — el mensaje sigue esperando al agente, el burst no se cierra", inPending)
+	}
+
+	// Un sweep más con el canal todavía caído: no debe salir un segundo aviso.
+	pusher.sweepOnce()
+
+	pendingAfter, err := st.PendingOutbox(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pendingAfter) != 1 {
+		t.Errorf("outbox pending tras un sweep extra con el canal aún caído = %d, want todavía 1 — el aviso no se repite mientras dura el corte", len(pendingAfter))
 	}
 }
 

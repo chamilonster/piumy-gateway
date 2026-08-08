@@ -292,6 +292,14 @@ type Pusher struct {
 	// (for the recovery line's count). Same single-goroutine convention.
 	channelDownSince map[string]time.Time
 	channelDownFails map[string]int
+
+	// channelDownNotified is T47 (ct-2026-08-08-233459)'s own bookkeeping —
+	// keyed by terminalID then chatJID: whether the "agente sin conexión"
+	// notice was already queued to chatJID for the CURRENT channel-down
+	// episode of terminalID. One notice per outage per chat, not one per
+	// sweep — recordChannelRecovered clears the whole per-terminalID map so
+	// a LATER cut can notify again.
+	channelDownNotified map[string]map[string]bool
 }
 
 // New builds a Pusher. injector is the initial Injector for PortFallback
@@ -308,13 +316,14 @@ func New(st *store.Store, rt *router.Manager, gate *mcpserver.Gate, injector Inj
 	}
 	return &Pusher{
 		store: st, router: rt, gate: gate,
-		cfg:              cfg,
-		injectors:        injectors,
-		redispatchCount:  map[dispatchAnchor]int{},
-		lastDispatchAt:   map[dispatchAnchor]time.Time{},
-		logState:         map[string]bool{},
-		channelDownSince: map[string]time.Time{},
-		channelDownFails: map[string]int{},
+		cfg:                 cfg,
+		injectors:           injectors,
+		redispatchCount:     map[dispatchAnchor]int{},
+		lastDispatchAt:      map[dispatchAnchor]time.Time{},
+		logState:            map[string]bool{},
+		channelDownSince:    map[string]time.Time{},
+		channelDownFails:    map[string]int{},
+		channelDownNotified: map[string]map[string]bool{},
 	}
 }
 
@@ -543,6 +552,12 @@ func (p *Pusher) logTransition(key string, active bool, onEnter, onExit func()) 
 	}
 }
 
+// channelDownNoticeThreshold (T47, ct-2026-08-08-233459): how long a
+// reply's channel must stay down before the owner gets notified — a blip
+// under this must stay silent, per the boss's own "resiliente si se corta
+// 48 horas" requirement (S4b/ct-2026-07-30-1255, honored unchanged here).
+const channelDownNoticeThreshold = 60 * time.Second
+
 // recordChannelDown logs the channel-down transition exactly once
 // (logTransition, keyed by terminalID) and tracks the failed-attempt count
 // for recordChannelRecovered's exit line — "canal caído" is a sustained
@@ -571,6 +586,38 @@ func (p *Pusher) recordChannelRecovered(terminalID string) {
 	delete(p.channelDownSince, terminalID)
 	delete(p.channelDownFails, terminalID)
 	delete(p.logState, "channelDown:"+terminalID)
+	// T47 (ct-2026-08-08-233459): this outage is over — a later cut must be
+	// able to notify again, so the per-chat dedup resets with it.
+	delete(p.channelDownNotified, terminalID)
+}
+
+// maybeNotifyChannelDown is T47 hueco 1 (ct-2026-08-08-233459): a reply
+// target whose antenna is CONFIGURED but currently unreachable (the
+// machine is off, on another network — Inject fails, as opposed to no
+// antenna at all) used to retry forever in silence — recordChannelDown's
+// own transient bookkeeping never told the owner. Once the outage has
+// lasted past channelDownNoticeThreshold, queue the notice exactly once
+// per outage per chat (channelDownNotified) — never before the threshold
+// (a blip must not alarm the owner) and never more than once while the
+// channel stays down. Deliberately does NOT touch the burst — hueco 1 is
+// about resilience (ct-2026-07-30-1255's own "aguanta 48h" requirement),
+// not about closing anything; the message keeps waiting for the agent.
+func (p *Pusher) maybeNotifyChannelDown(terminalID, chatJID string) {
+	since, tracked := p.channelDownSince[terminalID]
+	if !tracked || time.Since(since) < channelDownNoticeThreshold {
+		return
+	}
+	if p.channelDownNotified[terminalID][chatJID] {
+		return
+	}
+	if err := p.store.Enqueue(chatJID, "agente sin conexión", time.Now().Unix()); err != nil {
+		log.Printf("capipush: aviso de canal caído a %s: %v", chatJID, err)
+		return
+	}
+	if p.channelDownNotified[terminalID] == nil {
+		p.channelDownNotified[terminalID] = map[string]bool{}
+	}
+	p.channelDownNotified[terminalID][chatJID] = true
 }
 
 // isDebounced returns true when a chat's burst should be held back to wait
@@ -681,11 +728,17 @@ func (p *Pusher) dueChats() (map[string][]store.Message, error) {
 // resolveReplyTarget is T43 (ct-2026-08-08-2043): if the newest message in
 // burst — the one that just triggered this sweep — quotes a message a
 // registered agent sent via send_to_boss (messages.origin_terminal_id,
-// T39), the reply routes back to THAT agent's terminal. ok=false for any
-// other case (not a reply, the quoted row doesn't exist, it wasn't
-// agent-authored, or that agent no longer has a live injector) — the
-// caller then falls through to today's unchanged precedence instead of
-// stranding the message on a dead terminal_id.
+// T39), the reply routes back to THAT agent's terminal. ok=false only for
+// "not actually a reply to an agent" (no QuotedID, the quoted row doesn't
+// exist, or it wasn't agent-authored) — the caller then falls through to
+// today's unchanged precedence.
+//
+// T44 (ct-2026-08-08-2251) removed the InjectorFor check that used to live
+// here: boss verbatim "siempre que el boss responda a un mensaje de agente
+// is boss le llega a ese terminal" — no silent fallback to the principal
+// for a reply, live antenna or not. Whether that terminal is actually
+// reachable is now dispatch()'s problem (notifyAgentUnreachable), not a
+// reason to pick a different destination.
 func (p *Pusher) resolveReplyTarget(chatJID string, burst []store.Message) (string, bool) {
 	if len(burst) == 0 {
 		return "", false
@@ -698,10 +751,59 @@ func (p *Pusher) resolveReplyTarget(chatJID string, burst []store.Message) (stri
 	if err != nil || !found || quoted.OriginTerminalID == "" {
 		return "", false
 	}
-	if _, injOK := p.InjectorFor(quoted.OriginTerminalID); !injOK {
-		return "", false
-	}
 	return quoted.OriginTerminalID, true
+}
+
+// repliesTo reports whether msg is a reply (non-empty QuotedID) whose
+// quoted row was authored by terminalID — the same lookup resolveReplyTarget
+// does for the burst's newest message, applied here to ANY message in the
+// burst (T47, ct-2026-08-08-233459's own hueco 2 fix).
+func (p *Pusher) repliesTo(chatJID string, msg store.Message, terminalID string) bool {
+	if msg.QuotedID == "" {
+		return false
+	}
+	quoted, found, err := p.store.GetMessageByID(chatJID, msg.QuotedID)
+	if err != nil || !found {
+		return false
+	}
+	return quoted.OriginTerminalID == terminalID
+}
+
+// notifyAgentUnreachable is T44 (ct-2026-08-08-2251): a reply's destination
+// is never allowed to silently fall back to the principal (that's the exact
+// defect T44 corrects in T43's own design) nor to sit quietly in
+// PendingDedicated forever (this exact terminal_id resolves the same way
+// every re-sweep — it would retry in a circle). Instead: queue a plain,
+// unsigned notice — "mensaje automático de Piumy" (boss verbatim), never an
+// agent's voice, so no [name] prefix and no EnqueueFromAgent — to the
+// chat the reply came from.
+//
+// T47 hueco 2 (ct-2026-08-08-233459) corrected what "close" means here: the
+// original T44 version closed the WHOLE burst (MarkHandledBefore up to the
+// newest message's ts) — silently swallowing any earlier, non-reply
+// message in the same burst that was meant for the principal (reproduced:
+// a plain "hola" followed by a reply to a dead agent lost the "hola"
+// entirely). Now only the messages THIS burst that are actually replies to
+// terminalID get marked handled (repliesTo) — anything else (a plain
+// message, or a reply to a DIFFERENT agent) stays pending and the next
+// sweep routes it normally (no reply message left at the front of what
+// remains, so resolveReplyTarget no longer fires for it). One notice per
+// call — the caller invokes this once per dispatch(), never per message —
+// but this can mark more than one message handled when several burst
+// messages all reply to the same terminalID.
+func (p *Pusher) notifyAgentUnreachable(chatJID, terminalID string, burst []store.Message) error {
+	if err := p.store.Enqueue(chatJID, "agente sin conexión", time.Now().Unix()); err != nil {
+		return err
+	}
+	for _, msg := range burst {
+		if !p.repliesTo(chatJID, msg, terminalID) {
+			continue
+		}
+		if err := p.store.MarkHandled(chatJID, msg.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dispatch registers one dispatch for chatJID's terminal and hands the
@@ -753,8 +855,18 @@ func (p *Pusher) dispatch(chatJID string, burst []store.Message) error {
 	// reply to a message an agent sent via send_to_boss must reach that
 	// agent even from an is_boss chat — otherwise (1) always wins and a
 	// reply could never leave the principal.
+	//
+	// T44 (ct-2026-08-08-2251) corrects T43's own precedence (0): unlike
+	// (2)/(3) above, a reply's destination does NOT fall back to anything
+	// else when unreachable — boss verbatim "siempre que el boss responda a
+	// un mensaje de agente is boss le llega a ese terminal, y si el mensaje
+	// no llega, entonces que diga 'agente sin conexion'". isReply tracks
+	// whether terminalID came from a reply, so the no-antenna check further
+	// down can tell "silently retained, as always" (unassigned/router/
+	// agent_exclusive) apart from "must notify, never fall back" (a reply).
 	terminalID := p.cfg.PortFallback
-	if replyTerminalID, ok := p.resolveReplyTarget(chatJID, burst); ok {
+	replyTerminalID, isReply := p.resolveReplyTarget(chatJID, burst)
+	if isReply {
 		terminalID = replyTerminalID
 	} else if level != mcpserver.LevelBoss {
 		resolvedByAssignment := false
@@ -789,6 +901,16 @@ func (p *Pusher) dispatch(chatJID string, burst []store.Message) error {
 	_, isLogInjector := inj.(LogInjector)
 	cr, hasConfiguredCheck := inj.(interface{ Configured() bool })
 	if isLogInjector || (hasConfiguredCheck && !cr.Configured()) {
+		// T44 (ct-2026-08-08-2251): a reply target with no live antenna must
+		// NOT get the normal quiet retention below (that would strand it in
+		// a retry circle — this exact terminal_id resolves the same way
+		// every re-sweep) nor fall back to the principal in silence (the
+		// defect T44 exists to fix). Notify the owner and close only the
+		// reply(ies) to THIS terminal (T47 hueco 2) — not the whole burst.
+		if isReply {
+			log.Printf("capipush: terminal %s (destino de un reply) sin antena registrada — aviso encolado a %s", terminalID, chatJID)
+			return p.notifyAgentUnreachable(chatJID, terminalID, burst)
+		}
 		p.logTransition("noAntenna:"+terminalID, true, func() {
 			log.Printf("capipush: terminal %s sin antena registrada — despacho retenido (chat %s queda en PendingDedicated para MCP-pull)", terminalID, chatJID)
 		}, nil)
@@ -912,6 +1034,13 @@ func (p *Pusher) dispatch(chatJID string, burst []store.Message) error {
 		}
 		p.recordChannelDown(terminalID, chatJID, level, err)
 		p.gate.CancelDispatch(nonce, terminalID)
+		// T47 hueco 1 (ct-2026-08-08-233459): only for a reply — this is
+		// the CONFIGURED-but-unreachable case (Inject failed), distinct
+		// from "no antenna at all" (notifyAgentUnreachable, above). Never
+		// closes the burst — the message keeps waiting for the agent.
+		if isReply {
+			p.maybeNotifyChannelDown(terminalID, chatJID)
+		}
 		// S4c (ct-2026-07-30-1512): logged above via recordChannelDown, not
 		// propagated — sweepOnce's own generic log line would otherwise
 		// repeat the exact same failure every 5s sweep for as long as the

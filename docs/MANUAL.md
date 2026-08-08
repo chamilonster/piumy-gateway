@@ -2120,17 +2120,85 @@ el modelo vigente: tracking por `terminal_id`, default DENY) +
   `Pusher.resolveReplyTarget(chatJID, burst)` mira el `QuotedID` del
   ÚLTIMO mensaje del burst (el que disparó este sweep); si esa fila citada
   existe (`store.GetMessageByID`) y tiene `OriginTerminalID` no vacío
-  (T39: el mensaje lo mandó un agente vía `send_to_boss`) y ese terminal
-  tiene un injector real (`InjectorFor`, mismo guard que M4), **ese es el
+  (T39: el mensaje lo mandó un agente vía `send_to_boss`), **ese es el
   destino — incluso para un chat `is_boss`**, saltando (1) por completo.
-  Cualquier otro caso (sin `QuotedID`, fila citada inexistente, mensaje
-  citado no escrito por un agente, o agente sin antena viva) cae, sin
-  cambios, a la precedencia (1)-(4) de M4 — un reply a un agente que ya no
-  está no se pierde ni se traba, va al principal como cualquier mensaje
-  normal. Todo el burst viaja a UN SOLO destino (invariante ya existente,
-  sin fragmentar); si el dueño quiere responder a dos agentes distintos en
-  el mismo chat, cada reply debe llegar en su propio sweep (el burst
-  anterior ya `handled`).
+  Sin `QuotedID`, fila citada inexistente, o mensaje citado no escrito por
+  un agente: cae, sin cambios, a la precedencia (1)-(4) de M4. Todo el
+  burst viaja a UN SOLO destino (invariante ya existente, sin fragmentar);
+  si el dueño quiere responder a dos agentes distintos en el mismo chat,
+  cada reply debe llegar en su propio sweep (el burst anterior ya
+  `handled`). **Corrección de T44 (ver abajo):** la versión original de
+  T43 exigía además que el agente tuviera un injector real (`InjectorFor`)
+  — si no, caía a la precedencia (1)-(4) igual que "no es reply". T44
+  sacó ese chequeo de acá: un reply SIEMPRE tiene como destino el agente
+  citado, tenga antena o no.
+- **T44 (ct-2026-08-08-2251) — un reply nunca cae al principal en
+  silencio:** corrección del propio Citrino sobre T43. Pedido del dueño
+  verbatim — "siempre que el boss responda a un mensaje de agente is boss
+  le llega a ese terminal, y si el mensaje no llega, entonces que diga
+  'agente sin conexion'". `resolveReplyTarget` ya no chequea `InjectorFor`
+  (ver nota de T43 arriba) — el destino de un reply es siempre el agente
+  citado. La reachability se decide en `dispatch`, más abajo, con un `bool
+  isReply` que distingue "sin antena, pero es un reply" de "sin antena, es
+  el caso de siempre" (M4/T43): si el terminal resuelto por reply no tiene
+  antena viva, en vez de la retención silenciosa de siempre (`return nil`,
+  el mensaje sigue en `PendingDedicated`), `Pusher.notifyAgentUnreachable`
+  encola (`Store.Enqueue`, nunca `EnqueueFromAgent` — es un mensaje
+  automático de Piumy, boss verbatim, nunca la voz de un agente, sin
+  prefijo `[nombre]`) el texto EXACTO `agente sin conexión` al chat de
+  donde vino el reply. Lo que NO cambia: un mensaje sin `QuotedID`, o que
+  cita algo que no escribió un agente, sigue yendo al principal
+  exactamente como antes — esto es solo para el reply a un agente.
+  **Corrección de T47 (ver abajo):** la versión original de T44 cerraba
+  el burst ENTERO con `MarkHandledBefore` — perdía en silencio cualquier
+  mensaje normal mezclado en el mismo burst. T47 lo corrigió: ahora cierra
+  solo los mensajes que son reply a ESE terminal.
+- **T47 (ct-2026-08-08-233459) — los dos huecos que quedaban en el aviso
+  "agente sin conexión":** Citrino los encontró leyendo el código y con un
+  test de reproducción (corrido y borrado, no quedó en el repo). Ninguno
+  es un defecto de T44, son casos que T44 no cubría.
+  - **Hueco 1 — agente con antena CONFIGURADA pero máquina caída.** T44
+    solo avisaba cuando no había antena registrada/configurada
+    (`LogInjector` o `!Configured()`). Si el agente tiene credenciales
+    válidas pero `Inject()` falla por conexión (máquina apagada, otra
+    red), `dispatch` caía en `recordChannelDown` y reintentaba cada sweep
+    para siempre, en silencio — el caso más común de "el agente no está
+    conectado" en la vida real. Corrección: nueva constante
+    `channelDownNoticeThreshold` (60 s) y `Pusher.maybeNotifyChannelDown`,
+    llamada desde el path de fallo de `Inject()` solo cuando `isReply`.
+    Reusa el estado que ya existía (`channelDownSince`/`channelDownFails`,
+    limpiados por `recordChannelRecovered`) — no inventa un reloj nuevo.
+    Un blip bajo el umbral no avisa (el dueño pidió explícitamente que el
+    canal aguante un corte de 48 h sin perder nada, S4b/ct-2026-07-30-1255,
+    sin tocar). Pasado el umbral, avisa UNA vez por caída y por chat —
+    `channelDownNotified map[terminalID]map[chatJID]bool`, limpiado por
+    `recordChannelRecovered` para que un corte posterior vuelva a poder
+    avisar. **A diferencia del hueco de "sin antena", acá NO se cierra
+    nada** — el agente puede volver, el mensaje sigue esperándolo. Caso
+    vecino que ya funcionaba y no se tocó: si el terminal se cerró pero su
+    CleverCoder sigue vivo, el servidor responde `terminal_gone`,
+    `markDead()` descarta la credencial, y el sweep siguiente entra por
+    `!Configured()` → avisa por el camino de T44, sin pasar por acá.
+  - **Hueco 2 — el burst mixto perdía los mensajes que no eran replies.**
+    Más grave: pérdida de mensajes del dueño, en silencio.
+    `resolveReplyTarget` mira SOLO el último mensaje del burst para decidir
+    el destino (T43, sin cambios — rediseñar el agrupamiento del burst es
+    otro contrato, acá solo se corrige la pérdida). Pero
+    `notifyAgentUnreachable` cerraba el burst ENTERO con
+    `MarkHandledBefore(chat, TS del último)` — incluidos mensajes
+    anteriores del burst que no eran replies y le tocaban al principal.
+    Corrección: nueva función `Pusher.repliesTo(chatJID, msg, terminalID)`
+    (mismo lookup que `resolveReplyTarget`, aplicado a CUALQUIER mensaje
+    del burst, no solo al último) y `notifyAgentUnreachable` ahora itera
+    el burst marcando `MarkHandled` solo los mensajes para los que
+    `repliesTo` da true — el resto queda pendiente, y el sweep siguiente
+    los enruta normalmente (sin el reply adelante, `resolveReplyTarget` ya
+    no dispara para ellos). Efecto secundario correcto, no un defecto: un
+    burst con replies a dos agentes caídos distintos produce un aviso por
+    agente, en sweeps consecutivos (`notifyAgentUnreachable` sigue
+    llamándose una sola vez por `dispatch()` — nunca por mensaje — pero
+    puede marcar más de un mensaje handled si varios citan al mismo
+    terminal).
 - **Agentes paso 1 (ct-2026-07-29) — CRUD REST + limpieza de huérfanos.**
   Antes de codear: medí el punto 5 del boss ("que si a un agente secundario
   le llega un mensaje a un chat asignado se envíe por su cAPI") y encontré
