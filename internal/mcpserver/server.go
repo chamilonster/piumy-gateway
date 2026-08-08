@@ -891,6 +891,14 @@ func New(ctx context.Context, d Deps) *server.MCPServer {
 	addGroupTools(s, d, tracker)
 	addMediaTools(s, d, tracker)
 	addAgentTools(s, d)
+	// send_to_boss (T39, ct-2026-08-08-1619): DELIBERATELY not passed
+	// through levelGateMiddleware's gated-tool maps (bossOnlyTools/
+	// enumerationTools/chatScopedArg in levelgate.go) — same "no chat
+	// concept, stays open regardless" exemption get_status/get_decision_policy
+	// already have, not a new mechanism. Safe here because the tool itself
+	// has no caller-supplied destination and resolves its caller's identity
+	// from the connection, never a parameter — see send_to_boss.go's own doc.
+	addSendToBossTool(s, d, tracker)
 
 	return s
 }

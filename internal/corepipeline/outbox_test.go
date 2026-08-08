@@ -39,6 +39,28 @@ func TestProcessOutboxSendsMarksSentAndRecordsSentRow(t *testing.T) {
 	}
 }
 
+// TestProcessOutboxRecordsOriginTerminalIDOnSentRow is T39's own regression
+// (ct-2026-08-08-1619, send_to_boss): origin_terminal_id must travel from
+// the outbox row (EnqueueFromAgent) onto the resulting messages row
+// (sentMessageRow) — the data a later reply-routing feature needs, not read
+// anywhere yet but must not get lost in transit.
+func TestProcessOutboxRecordsOriginTerminalIDOnSentRow(t *testing.T) {
+	st, _, _, _, p := newTestPipeline(t)
+	if err := st.EnqueueFromAgent("555000002@s.whatsapp.net", "[Agente Uno] hola boss", 1, "term-555002"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.processOutbox(context.Background())
+
+	msgs, err := st.GetMessages("555000002@s.whatsapp.net", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].OriginTerminalID != "term-555002" {
+		t.Fatalf("got messages=%+v, want one message with origin_terminal_id=term-555002", msgs)
+	}
+}
+
 // TestProcessOutboxMetersUsageOnSuccessfulSend is the ST-D regression
 // (ct-2026-07-11-074139): processOutbox is the ONE real-send choke point
 // (send_message/draft-approved/autoreply-auto-send/a plain dashboard

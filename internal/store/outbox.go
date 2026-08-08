@@ -20,6 +20,12 @@ type Outbox struct {
 	NextRetryTS int64  `json:"next_retry_ts,omitempty"`
 	LastError   string `json:"last_error,omitempty"`
 	DeadLetter  bool   `json:"dead_letter"`
+	// OriginTerminalID (T39, ct-2026-08-08-1619): the agent terminal that
+	// queued this via send_to_boss — "" for everything else. Copied onto
+	// the resulting messages row once sent (sentMessageRow) so a later
+	// reply-routing feature can find which agent to route the owner's
+	// answer back to.
+	OriginTerminalID string `json:"origin_terminal_id,omitempty"`
 }
 
 // Enqueue queues an outbound message with no model attribution — for
@@ -40,8 +46,20 @@ func (s *Store) EnqueueWithModel(toJID, text string, ts int64, model string) err
 	return err
 }
 
+// EnqueueFromAgent queues an outbound message on behalf of a registered
+// agent terminal (send_to_boss, T39, ct-2026-08-08-1619) — same queue as
+// every other outbound path, paced by the same anti-ban governor on drain.
+// originTerminalID travels to the resulting messages row once sent (see
+// OriginTerminalID's own doc); it is never a model attribution, so this
+// leaves outbox.model unset, unlike EnqueueWithModel.
+func (s *Store) EnqueueFromAgent(toJID, text string, ts int64, originTerminalID string) error {
+	_, err := s.db.Exec(`INSERT INTO outbox (to_jid, text, created_ts, origin_terminal_id) VALUES (?, ?, ?, ?)`,
+		toJID, text, ts, originTerminalID)
+	return err
+}
+
 const outboxColumns = `seq, to_jid, text, created_ts, COALESCE(model,''),
-	retry_count, next_retry_ts, COALESCE(last_error,''), dead_letter`
+	retry_count, next_retry_ts, COALESCE(last_error,''), dead_letter, origin_terminal_id`
 
 func scanOutbox(rows *sql.Rows) ([]Outbox, error) {
 	defer rows.Close()
@@ -50,7 +68,7 @@ func scanOutbox(rows *sql.Rows) ([]Outbox, error) {
 		var o Outbox
 		var deadLetter int
 		if err := rows.Scan(&o.Seq, &o.ToJID, &o.Text, &o.CreatedTS, &o.Model,
-			&o.RetryCount, &o.NextRetryTS, &o.LastError, &deadLetter); err != nil {
+			&o.RetryCount, &o.NextRetryTS, &o.LastError, &deadLetter, &o.OriginTerminalID); err != nil {
 			return nil, err
 		}
 		o.DeadLetter = deadLetter != 0

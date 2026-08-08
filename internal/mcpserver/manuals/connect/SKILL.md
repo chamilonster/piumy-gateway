@@ -1,6 +1,6 @@
 ---
 name: piumy-connect
-description: Use when you are an AI agent that needs to connect to a Piumy gateway — first time, o para reconectarte después de que las claves rotaron. Te deja conectado y recibiendo despachos; no te dice cómo contestar (eso es piumy-operator) ni cómo configurar el sistema (eso es piumy-orchestrator).
+description: Use when you are an AI agent that needs to connect to a Piumy gateway — first time, or if a call starts failing with 401 (reread agent-connect.json and retry once before assuming the key changed). Te deja conectado y recibiendo despachos; no te dice cómo contestar (eso es piumy-operator) ni cómo configurar el sistema (eso es piumy-orchestrator).
 ---
 
 > Fuente de verdad de este manual — vive en el repo y se embebe en el binario (`get_manual` por MCP, ct-2026-08-05-0225). `.claude/skills/piumy-connect/SKILL.md` es una copia; editarla a ella no tiene efecto.
@@ -36,7 +36,7 @@ Los dos puertos que declara `agent-connect.json` (`mcp_url`, `rest_url` — paso
 
 ### 3. Lee `agent-connect.json`
 
-Vive en la carpeta de datos de la instalación, junto a `status.json` — en una instalación estándar de Windows, `%LOCALAPPDATA%\Piumy\secrets\agent-connect.json`. Se reescribe entero en cada arranque; las claves pueden haber rotado desde la última vez que te conectaste.
+Vive en la carpeta de datos de la instalación, junto a `status.json` — en una instalación estándar de Windows, `%LOCALAPPDATA%\Piumy\secrets\agent-connect.json`. El archivo se reescribe entero en cada arranque del gateway — pero la clave que trae adentro normalmente **no cambia**: el instalador la genera una sola vez, y reinstalar sobre una instalación existente la conserva (aborta antes que pisarla con una nueva). No es una promesa de que nunca vaya a cambiar — ante un 401 con una clave que te venía andando, releé este archivo y reintenta una vez antes de suponer otra cosa; no hace falta reabrir el cliente.
 
 ```json
 {
@@ -92,7 +92,7 @@ Esta es la entrada que tienes que dejar en tu cliente MCP. En una instalación e
 
 **Los dos errores que dejan esto sin funcionar, y no se ven hasta que fallas:**
 
-- **La clave.** Sale de `agent-connect.json` de **esta** instalación (paso 3) y **rota en cada arranque**. Una clave copiada de otra instalación, de un ejemplo, o de una configuración vieja devuelve **HTTP 401**, siempre. No hay clave "de desarrollo" que sirva en una instalación real.
+- **La clave.** Sale de `agent-connect.json` de **esta** instalación (paso 3). Normalmente es estable entre arranques — el instalador la genera una sola vez y reinstalar la conserva —, pero no está prometido que nunca cambie. Una clave copiada de otra instalación, de un ejemplo, o de una configuración vieja devuelve **HTTP 401**, siempre. No hay clave "de desarrollo" que sirva en una instalación real. Ante un 401 con una clave que te venía andando, releé `agent-connect.json` y reintenta una vez antes de suponer otra cosa.
 - **El identificador.** Va tu `chat_id` del paso 4, **entero y tal cual** (`capi-<proyecto>-<agente>-<verificador>`). No pongas tu nombre, ni `principal`, ni un valor inventado: el despacho se entrega por ese campo, y con un valor que el gateway no reconoce no te llega nada — sin error visible.
 
 Si estás dentro de CleverCoder, no edites el `.mcp.json` a mano (se regenera): usa `my_mcp_add` con `name:"piumy-gateway"` y este mismo objeto como `payload`. **Toma efecto al reabrir tu terminal**, no antes.

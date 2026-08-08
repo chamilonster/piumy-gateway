@@ -91,6 +91,79 @@ func TestMigrateAddsDecryptRetryAtToExistingMessagesTable(t *testing.T) {
 	}
 }
 
+// TestMigrateAddsOriginTerminalIDToExistingOutboxAndMessagesTables is the DoD
+// regression for T39 (ct-2026-08-08-1619): the owner's live install already
+// has outbox/messages without origin_terminal_id — CREATE TABLE IF NOT
+// EXISTS is a no-op there, same reasoning as T35's decrypt_retry_at
+// migration test. Hand-creates BOTH tables in their pre-T39 shape before
+// Open() ever runs, then checks migrate() backfilled both columns and that
+// EnqueueFromAgent/AddMessage (write) and DueOutbox/GetMessages (read) work
+// against the migrated tables.
+func TestMigrateAddsOriginTerminalIDToExistingOutboxAndMessagesTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "piumy.db")
+
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE messages (
+		chat_jid TEXT    NOT NULL,
+		id       TEXT    NOT NULL,
+		from_me  INTEGER NOT NULL,
+		sender   TEXT,
+		text     TEXT,
+		ts       INTEGER NOT NULL,
+		type     TEXT,
+		handled  INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (chat_jid, id)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE outbox (
+		seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+		to_jid     TEXT    NOT NULL,
+		text       TEXT    NOT NULL,
+		created_ts INTEGER NOT NULL,
+		sent       INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on pre-existing outbox/messages tables without origin_terminal_id: %v", err)
+	}
+	defer s.Close()
+
+	if err := s.EnqueueFromAgent("555000001@s.whatsapp.net", "[Agente Uno] hola", 100, "term-555"); err != nil {
+		t.Fatalf("EnqueueFromAgent after migration: %v", err)
+	}
+	due, err := s.DueOutbox(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].OriginTerminalID != "term-555" {
+		t.Fatalf("got DueOutbox=%+v, want one item with origin_terminal_id=term-555", due)
+	}
+
+	if err := s.AddMessage(Message{
+		ChatJID: "555000001@s.whatsapp.net", ID: "wamid-1", FromMe: true, Text: "[Agente Uno] hola", TS: 100,
+		OriginTerminalID: "term-555",
+	}); err != nil {
+		t.Fatalf("AddMessage after migration: %v", err)
+	}
+	msgs, err := s.GetMessages("555000001@s.whatsapp.net", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].OriginTerminalID != "term-555" {
+		t.Fatalf("got GetMessages=%+v, want one message with origin_terminal_id=term-555", msgs)
+	}
+}
+
 // TestMigrateMimeInTextSwapsCorruptedRows is the regression for
 // ct-2026-07-21-1727: a pre-fix build's handleMessage stored a media
 // message's mime in messages.text and its caption in messages.type

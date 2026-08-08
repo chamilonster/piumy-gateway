@@ -28,6 +28,14 @@ type Message struct {
 	QuotedID      string `json:"quoted_id,omitempty"`
 	QuotedPreview string `json:"quoted_preview,omitempty"`
 	Forwarded     bool   `json:"forwarded,omitempty"`
+
+	// OriginTerminalID (T39, ct-2026-08-08-1619): the agent terminal that
+	// sent this message via send_to_boss — "" for everything else (a normal
+	// AI reply, a human via REST, inbound). Copied from outbox.
+	// origin_terminal_id at send time (sentMessageRow) — not read anywhere
+	// yet, it's what a later reply-routing feature (the owner answers by
+	// quoting a message, it reaches THAT agent) will key off.
+	OriginTerminalID string `json:"origin_terminal_id,omitempty"`
 }
 
 // AddMessage inserts a message, deduped by the messages PRIMARY KEY
@@ -40,11 +48,11 @@ func (s *Store) AddMessage(m Message) error {
 	}
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO messages
 		(chat_jid, id, from_me, sender, text, ts, type, model, delivered_ts, read_ts,
-		 quoted_id, quoted_preview, forwarded)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 quoted_id, quoted_preview, forwarded, origin_terminal_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ChatJID, m.ID, b2i(m.FromMe), m.Sender, m.Text, m.TS, m.Type,
 		nullIfEmpty(m.Model), m.DeliveredTS, m.ReadTS,
-		m.QuotedID, m.QuotedPreview, b2i(m.Forwarded))
+		m.QuotedID, m.QuotedPreview, b2i(m.Forwarded), m.OriginTerminalID)
 	return err
 }
 
@@ -72,7 +80,7 @@ func (s *Store) MarkDecryptRetry(chatJID, msgID string, ts int64) error {
 
 const messageColumns = `chat_jid, id, from_me, COALESCE(sender,''),
 	COALESCE(text,''), ts, COALESCE(type,''), COALESCE(model,''), delivered_ts, read_ts,
-	COALESCE(quoted_id,''), COALESCE(quoted_preview,''), forwarded, decrypt_retry_at`
+	COALESCE(quoted_id,''), COALESCE(quoted_preview,''), forwarded, decrypt_retry_at, origin_terminal_id`
 
 func scanMessages(rows *sql.Rows) ([]Message, error) {
 	defer rows.Close()
@@ -82,7 +90,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		var fromMe, forwarded int
 		if err := rows.Scan(&m.ChatJID, &m.ID, &fromMe, &m.Sender, &m.Text, &m.TS, &m.Type,
 			&m.Model, &m.DeliveredTS, &m.ReadTS,
-			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt); err != nil {
+			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt, &m.OriginTerminalID); err != nil {
 			return nil, err
 		}
 		m.FromMe = fromMe != 0
@@ -100,7 +108,7 @@ func (s *Store) LastMessage(chatJID string) (m Message, ok bool, err error) {
 	err = s.db.QueryRow(`SELECT `+messageColumns+`
 		FROM messages WHERE chat_jid = ? ORDER BY ts DESC, rowid DESC LIMIT 1`, chatJID).
 		Scan(&m.ChatJID, &m.ID, &fromMe, &m.Sender, &m.Text, &m.TS, &m.Type, &m.Model, &m.DeliveredTS, &m.ReadTS,
-			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt)
+			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt, &m.OriginTerminalID)
 	if err == sql.ErrNoRows {
 		return Message{}, false, nil
 	}

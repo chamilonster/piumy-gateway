@@ -10,6 +10,14 @@
 // get_decision_policy, the 4 gate tools) were never part of this gating
 // and stay open regardless — requiring a dispatch just to read the queue
 // depth would gate harmless reads for no anti-leakage benefit.
+//
+// send_to_boss (send_to_boss.go, T39, ct-2026-08-08-1619) joins that same
+// exemption, but it's the first one with a real side effect (it sends) —
+// deliberate, not an oversight. Never add it to bossOnlyTools/
+// enumerationTools/chatScopedArg below: it has no destination argument (the
+// owner's chat only, store.BossJIDs()) and resolves its caller from the
+// connection, not a parameter — see that file's own doc for why that makes
+// it safe here.
 package mcpserver
 
 import (

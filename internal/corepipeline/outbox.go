@@ -163,16 +163,20 @@ func exponentialBackoff(retryCount int) time.Duration {
 // sentMessageRow builds the messages row for a successfully sent outbox
 // item, using the client's real response (id + timestamp) rather than
 // anything guessed at enqueue time — so delivery/read receipts, which
-// reference that id, can match it later.
+// reference that id, can match it later. OriginTerminalID (T39,
+// ct-2026-08-08-1619) travels the same way Model already does — set at
+// enqueue (EnqueueFromAgent), carried through the outbox row, copied here
+// onto the real sent message.
 func sentMessageRow(chatJID string, item store.Outbox, res gateway.SendResult) store.Message {
 	return store.Message{
-		ChatJID: chatJID,
-		ID:      res.MsgID,
-		FromMe:  true,
-		Text:    item.Text,
-		TS:      res.TS,
-		Type:    "text",
-		Model:   item.Model,
+		ChatJID:          chatJID,
+		ID:               res.MsgID,
+		FromMe:           true,
+		Text:             item.Text,
+		TS:               res.TS,
+		Type:             "text",
+		Model:            item.Model,
+		OriginTerminalID: item.OriginTerminalID,
 	}
 }
 

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS messages (
   type     TEXT,
   handled  INTEGER NOT NULL DEFAULT 0,
   decrypt_retry_at INTEGER NOT NULL DEFAULT 0,
+  origin_terminal_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (chat_jid, id)
 );
 CREATE TABLE IF NOT EXISTS outbox (
@@ -38,7 +39,8 @@ CREATE TABLE IF NOT EXISTS outbox (
   to_jid     TEXT    NOT NULL,
   text       TEXT    NOT NULL,
   created_ts INTEGER NOT NULL,
-  sent       INTEGER NOT NULL DEFAULT 0
+  sent       INTEGER NOT NULL DEFAULT 0,
+  origin_terminal_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS media (
@@ -227,6 +229,17 @@ var columnMigrations = []string{
 	// invisible in production (no log file, -H windowsgui has no console) —
 	// the exact defect this migration fixes.
 	`ALTER TABLE messages ADD COLUMN decrypt_retry_at INTEGER NOT NULL DEFAULT 0`,
+	// T39 (ct-2026-08-08-1619): origin_terminal_id records which agent
+	// terminal originated an outbound message via send_to_boss — "" for
+	// everything else (send_message/draft/autoreply/a human via REST). Not
+	// read anywhere yet: it's the data a later reply-routing feature (the
+	// owner answers by quoting a message, it reaches THAT agent) needs —
+	// stored now on purpose, per Citrino's explicit instruction not to skip
+	// it just because nothing consumes it today. outbox carries it from
+	// enqueue to send; messages gets the same value copied at send time
+	// (sentMessageRow, corepipeline/outbox.go) alongside the real MsgID.
+	`ALTER TABLE outbox ADD COLUMN origin_terminal_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE messages ADD COLUMN origin_terminal_id TEXT NOT NULL DEFAULT ''`,
 }
 
 // confirmationModeMigration adds chats.confirmation_mode with a flat

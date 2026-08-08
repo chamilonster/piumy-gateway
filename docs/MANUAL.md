@@ -2323,6 +2323,69 @@ el modelo vigente: tracking por `terminal_id`, default DENY) +
   crea un draft, disponible en cualquier modo (el agente puede optar por
   frenar aunque el chat esté en `none`; la checklist de contenido sensible
   es de la skill `/piumy`).
+- **`send_to_boss(text)` (tool nueva, `send_to_boss.go`, T39,
+  ct-2026-08-08-1619, boss verbatim: "que tal una herramienta: send to boss
+  en el mcp, que pueda usarlo cualqueira que tenga el mcp?" — enmienda
+  inmediata: "pero que el agente se identifique")** — un canal directo al
+  dueño para un terminal SIN despacho activo (el caso real: un agente en
+  medio de una tarea, "avisame cuando termines", no tiene nada que
+  contestar y hasta esta tool no tenía cómo llegarle). Tres decisiones, las
+  tres deliberadas:
+  - **Sin argumento de destino** — el destino sale SIEMPRE de
+    `store.BossJIDs()` (fan-out: una fila por cada chat `is_boss=1`, mismo
+    patrón que `restapi/recover.go`'s código de recuperación). Aceptar un
+    `chat_id` acá sería `send_message` sin el gate anti-leakage.
+  - **Identidad resuelta por la CONEXIÓN, nunca declarada** —
+    `terminalIDFromContext(ctx)` (`X-Piumy-Terminal-Id`), jamás un
+    parámetro (sería falsificable). `senderNameFor(d, termID)` matchea
+    contra `agents.antenna_terminal_id` (vía `ListAgents`, sin query
+    nueva) — **a propósito NO `store.GetAgent(termID)`/`agent_id`**:
+    `agent_id` queda fijo desde `register_agent` (el terminal_id del
+    llamador AL MOMENTO de registrarse), pero `antenna_terminal_id` es el
+    campo que `set_agent_capi` sí actualiza después — un agente cuyo
+    `antenna_terminal_id` cambió tras registrarse seguiría conectando con
+    un `X-Piumy-Terminal-Id` distinto de su `agent_id` original;
+    `GetAgent(termID)` lo rechazaría igual siendo un agente legítimo. El
+    principal se resuelve aparte, vía `store.PrincipalAgent` (nunca vive
+    en `agents`). **Sin terminal_id en el contexto, o uno no registrado:
+    error explícito nombrando el identificador — nada se encola** (el gap
+    que CleverCoder pidió por escrito cerrar: un terminal_id desconocido
+    hoy pasaba en silencio).
+  - **Firma visible**: `[nombre] texto` — el `Name` registrado si existe,
+    si no el `terminal_id` crudo (revisable, decisión de Citrino: el boss
+    pidió "el ID de capi"; el nombre se usa cuando existe por legible, el
+    id como respaldo que siempre funciona). No cosmética: con varios
+    agentes escribiéndole al mismo chat, el dueño necesita ver cuál es
+    cuál para elegir a cuál responderle (la tarea siguiente, ruteo por cita).
+  - **Encola, nunca envía directo** — `store.EnqueueFromAgent(jid, signed,
+    now, termID)`, un `for` por cada `BossJIDs()` (igual patrón que
+    `recover.go`). El drenado del outbox (governor + ventanas aleatorias)
+    es el único lugar donde algo sale de verdad — varios agentes llamando
+    a la vez nunca produce una ráfaga instantánea.
+  - **Fuera de `levelGateMiddleware` a propósito** (comentario propio en
+    `levelgate.go` y en `server.go`, no un olvido) — el primer tool
+    ungated con efecto real (un envío), no solo una lectura como
+    `get_status`/`get_decision_policy`/`get_manual`. Seguro por las dos
+    razones de arriba: sin `chat_id` que filtrar, identidad que no se
+    puede declarar.
+  - **`origin_terminal_id`** (columna nueva en `outbox` y `messages`,
+    `schema.go`, mismo patrón `CREATE TABLE` + `columnMigrations` que
+    `decrypt_retry_at` en T35) — el `terminal_id` que originó el envío,
+    copiado de `outbox` a `messages` en `sentMessageRow`
+    (`corepipeline/outbox.go`) junto al `MsgID` real. Vacío para
+    cualquier otro origen (`send_message`/`draft`/autoreply/REST) — lo
+    normal, no un error. **No se lee en ningún lado todavía** — es el dato
+    que una tarea futura (el dueño responde citando un mensaje, le llega a
+    ESE agente) va a necesitar; se guarda ahora a propósito, sin esperar a
+    que exista el consumidor.
+  - **Fuera de alcance, descartado por el dueño explícitamente**: sin
+    límite de mensajes por agente, sin temporizador (verbatim: "si se
+    logra solucionar lo de responderle a la gente, entonces ya no se
+    necesitaría un timer fijo... es cosa de responderle, ya no me escribas
+    tanto") y sin interruptor de encendido/apagado propio — mismo modelo
+    que el voice de CleverCoder: la tool avisa, no se prende ni se apaga a
+    sí misma; el control duro lo pone el dueño desde CleverCoder capando
+    la tool.
 - **T33 (ct-2026-08-06-1526) — `markDispatchChatIfDifferent`, cierra
   también el despacho activo cuando `to` es OTRO chat.** Caso real, en
   vivo: el boss ordenó por WhatsApp escribirle a un tercer número,

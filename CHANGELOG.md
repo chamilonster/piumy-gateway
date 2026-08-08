@@ -10,6 +10,24 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.11 — 2026-08-08
+
+### Added
+- **`send_to_boss`: un agente le puede escribir al dueño por WhatsApp sin
+  tener un despacho activo** (T39, ct-2026-08-08-1619, pedido del dueño:
+  "que tal una herramienta: send to boss en el mcp, que pueda usarlo
+  cualqueira que tenga el mcp?" — con la enmienda que define el diseño:
+  "pero que el agente se identifique"). Antes, un terminal sin despacho no
+  podía hacer nada — un agente en medio de una tarea ("avisame cuando
+  termines") no tenía forma de llegar al dueño. La herramienta no acepta
+  destino (siempre va a los chats marcados dueño) ni identidad declarada
+  (se resuelve del registro, cruzando la conexión — un terminal_id no
+  registrado recibe error explícito y no envía nada); el mensaje sale
+  firmado `[nombre] texto` y pasa por la misma cola con freno anti-ban de
+  siempre, nunca directo.
+
+---
+
 ## 0.1.10 — 2026-08-08
 
 ### Fixed
