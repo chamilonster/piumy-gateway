@@ -544,6 +544,10 @@ Piumy. Ver `docs/F1A-STORE-ACCESO.md`.
   que marcar. Cableada nil-safe desde `whatsmeow.handleRetryReceipt`.
 - `LastMessage/LastOutboundModel(chatJID)`
 - `GetMessages(jid, limit)`
+- `GetMessageByID(chatJID, id) (m Message, ok bool, err error)` (T43,
+  ct-2026-08-08-2043) — lookup por PK exacta. Lo usa `capipush.dispatch`
+  para resolver, dado el `QuotedID` de un reply entrante, el
+  `origin_terminal_id` del mensaje citado.
 - `ChatJIDsWithMessages() (map[string]bool, error)` (ct-2026-07-19-1801, S1g;
   filtro de contenido real ct-2026-07-29) — el set de `chat_jid` con AL
   MENOS un mensaje REAL (`realMessageSQL`, `chat.go`): texto o tipo no
@@ -2109,6 +2113,24 @@ el modelo vigente: tracking por `terminal_id`, default DENY) +
   (ct-2026-08-05-0311): `AgentExclusiveID` lee `c.Status`, nunca `c.Mode`
   — con los chats `auto` entrando ahora a `PendingDedicated`, el ruteo al
   preasignado aplica exactamente igual, sin tocar código acá.
+- **T43 (ct-2026-08-08-2043) — reply-routing, precedencia (0), por ENCIMA
+  de boss → principal:** pedido del dueño verbatim — "si yo le respondo a
+  un mensaje de un agente, se le responda a ese terminal... en un chat
+  puedo tener diferentes destinos, dependiendo a quién le respondo".
+  `Pusher.resolveReplyTarget(chatJID, burst)` mira el `QuotedID` del
+  ÚLTIMO mensaje del burst (el que disparó este sweep); si esa fila citada
+  existe (`store.GetMessageByID`) y tiene `OriginTerminalID` no vacío
+  (T39: el mensaje lo mandó un agente vía `send_to_boss`) y ese terminal
+  tiene un injector real (`InjectorFor`, mismo guard que M4), **ese es el
+  destino — incluso para un chat `is_boss`**, saltando (1) por completo.
+  Cualquier otro caso (sin `QuotedID`, fila citada inexistente, mensaje
+  citado no escrito por un agente, o agente sin antena viva) cae, sin
+  cambios, a la precedencia (1)-(4) de M4 — un reply a un agente que ya no
+  está no se pierde ni se traba, va al principal como cualquier mensaje
+  normal. Todo el burst viaja a UN SOLO destino (invariante ya existente,
+  sin fragmentar); si el dueño quiere responder a dos agentes distintos en
+  el mismo chat, cada reply debe llegar en su propio sweep (el burst
+  anterior ya `handled`).
 - **Agentes paso 1 (ct-2026-07-29) — CRUD REST + limpieza de huérfanos.**
   Antes de codear: medí el punto 5 del boss ("que si a un agente secundario
   le llega un mensaje a un chat asignado se envíe por su cAPI") y encontré

@@ -678,6 +678,32 @@ func (p *Pusher) dueChats() (map[string][]store.Message, error) {
 	return byChat, nil
 }
 
+// resolveReplyTarget is T43 (ct-2026-08-08-2043): if the newest message in
+// burst — the one that just triggered this sweep — quotes a message a
+// registered agent sent via send_to_boss (messages.origin_terminal_id,
+// T39), the reply routes back to THAT agent's terminal. ok=false for any
+// other case (not a reply, the quoted row doesn't exist, it wasn't
+// agent-authored, or that agent no longer has a live injector) — the
+// caller then falls through to today's unchanged precedence instead of
+// stranding the message on a dead terminal_id.
+func (p *Pusher) resolveReplyTarget(chatJID string, burst []store.Message) (string, bool) {
+	if len(burst) == 0 {
+		return "", false
+	}
+	quotedID := burst[len(burst)-1].QuotedID
+	if quotedID == "" {
+		return "", false
+	}
+	quoted, found, err := p.store.GetMessageByID(chatJID, quotedID)
+	if err != nil || !found || quoted.OriginTerminalID == "" {
+		return "", false
+	}
+	if _, injOK := p.InjectorFor(quoted.OriginTerminalID); !injOK {
+		return "", false
+	}
+	return quoted.OriginTerminalID, true
+}
+
 // dispatch registers one dispatch for chatJID's terminal and hands the
 // encrypted envelope (or plaintext JSON) to the injector. burst is the
 // full ordered list of unhandled messages for this chat (ts ASC, so
@@ -701,9 +727,9 @@ func (p *Pusher) dispatch(chatJID string, burst []store.Message) error {
 	// with zero router.json configuration, not just as the common case.
 	//
 	// M4 (ct-2026-07-22-1301) — agent_exclusive precedence, boss-ratified:
-	// (1) boss -> principal ALWAYS (above, untouched) > (2) agent_exclusive:
-	// <id> (manual assignment, M3) -> that agent > (3) router.json's route
-	// -> today's fallback, unchanged > (4) neither -> PortFallback. c.Status
+	// (1) boss -> principal ALWAYS (below) > (2) agent_exclusive: <id>
+	// (manual assignment, M3) -> that agent > (3) router.json's route ->
+	// today's fallback, unchanged > (4) neither -> PortFallback. c.Status
 	// was already WRITABLE in this exact form since chat.go's SetStatus/
 	// set_chat_status (validChatStatus) but never READ by dispatch until
 	// now. terminalID becomes agentID directly — the SAME identity space
@@ -719,8 +745,18 @@ func (p *Pusher) dispatch(chatJID string, burst []store.Message) error {
 	// agentID every time. Instead it falls through to precedence (3), the
 	// SAME fallback an unassigned chat gets — InjectorFor (the exported,
 	// ok-reporting sibling of injectorFor) is the check.
+	//
+	// T43 (ct-2026-08-08-2043) adds precedence (0), ABOVE all of the above
+	// including boss->principal: boss verbatim "si yo le respondo a un
+	// mensaje de un agente, se le responda a ese terminal... en un chat
+	// puedo tener diferentes destinos, dependiendo a quién le respondo". A
+	// reply to a message an agent sent via send_to_boss must reach that
+	// agent even from an is_boss chat — otherwise (1) always wins and a
+	// reply could never leave the principal.
 	terminalID := p.cfg.PortFallback
-	if level != mcpserver.LevelBoss {
+	if replyTerminalID, ok := p.resolveReplyTarget(chatJID, burst); ok {
+		terminalID = replyTerminalID
+	} else if level != mcpserver.LevelBoss {
 		resolvedByAssignment := false
 		if agentID, ok := store.AgentExclusiveID(c.Status); ok {
 			if _, injOK := p.InjectorFor(agentID); injOK {

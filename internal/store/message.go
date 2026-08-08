@@ -120,6 +120,28 @@ func (s *Store) LastMessage(chatJID string) (m Message, ok bool, err error) {
 	return m, true, nil
 }
 
+// GetMessageByID looks up one message by its (chat_jid, id) primary key —
+// T43 (ct-2026-08-08-2043)'s reply-routing lookup: given an inbound
+// message's QuotedID, find the quoted row to read its OriginTerminalID.
+// ok=false for no such row (id from before this chat's history window, or
+// simply wrong) — never an error on its own.
+func (s *Store) GetMessageByID(chatJID, id string) (m Message, ok bool, err error) {
+	var fromMe, forwarded int
+	err = s.db.QueryRow(`SELECT `+messageColumns+`
+		FROM messages WHERE chat_jid = ? AND id = ?`, chatJID, id).
+		Scan(&m.ChatJID, &m.ID, &fromMe, &m.Sender, &m.Text, &m.TS, &m.Type, &m.Model, &m.DeliveredTS, &m.ReadTS,
+			&m.QuotedID, &m.QuotedPreview, &forwarded, &m.DecryptRetryAt, &m.OriginTerminalID)
+	if err == sql.ErrNoRows {
+		return Message{}, false, nil
+	}
+	if err != nil {
+		return Message{}, false, err
+	}
+	m.FromMe = fromMe != 0
+	m.Forwarded = forwarded != 0
+	return m, true, nil
+}
+
 // LastOutboundModel returns messages.model of the most recent message this
 // chat SENT (from_me=1) — which model gave the last reply, even if a newer
 // inbound message has arrived since. "" if nothing has been sent yet.

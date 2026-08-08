@@ -699,6 +699,181 @@ func TestUnregisterInjectorStopsDispatchToOldCredentials(t *testing.T) {
 	}
 }
 
+// TestReplyToAgentMessageRoutesEvenFromBossChat is T43's own test
+// (ct-2026-08-08-2043): a reply quoting a message an agent sent via
+// send_to_boss must reach THAT agent's terminal — even though the chat is
+// is_boss, which today (precedence 1) always short-circuits straight to the
+// principal. This is the one precedence the boss actually asked for: "si yo
+// le respondo a un mensaje de un agente, se le responda a ese terminal".
+func TestReplyToAgentMessageRoutesEvenFromBossChat(t *testing.T) {
+	chat := "55500000030@c.us"
+	st, _, _, principal, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+	agentInj := &fakeInjector{}
+	pusher.RegisterInjector("agent-term", agentInj)
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out", FromMe: true, Text: "[Agente] avisando algo", TS: 1, OriginTerminalID: "agent-term"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply1", Text: "gracias, listo", TS: 2, QuotedID: "boss-out"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	if len(agentInj.calls) != 1 || agentInj.calls[0] != "agent-term" {
+		t.Errorf("agent injector calls = %v, want exactly one to agent-term", agentInj.calls)
+	}
+	if principal.count() != 0 {
+		t.Errorf("principal injector was called %d times, want 0 — a reply to an agent's message must never fall through to boss->principal", principal.count())
+	}
+}
+
+// TestReplyRoutingPerAgentInSameChat is the boss's own scenario verbatim:
+// "en un chat puedo tener diferentes destinos, dependiendo a quién le
+// respondo" — two different agents wrote into the SAME boss chat, and each
+// reply must reach its own author, not always the same one.
+func TestReplyRoutingPerAgentInSameChat(t *testing.T) {
+	chat := "55500000031@c.us"
+	st, _, _, _, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+	agentA := &fakeInjector{}
+	agentB := &fakeInjector{}
+	pusher.RegisterInjector("agent-a-term", agentA)
+	pusher.RegisterInjector("agent-b-term", agentB)
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out-a", FromMe: true, Text: "[A] mensaje de A", TS: 1, OriginTerminalID: "agent-a-term"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out-b", FromMe: true, Text: "[B] mensaje de B", TS: 2, OriginTerminalID: "agent-b-term"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply-to-a", Text: "respuesta para A", TS: 3, QuotedID: "boss-out-a"}); err != nil {
+		t.Fatal(err)
+	}
+	pusher.sweepOnce()
+	if len(agentA.calls) != 1 || agentA.calls[0] != "agent-a-term" {
+		t.Fatalf("after replying to A: agentA calls = %v, want exactly one to agent-a-term", agentA.calls)
+	}
+	if agentB.count() != 0 {
+		t.Fatalf("after replying to A: agentB was called %d times, want 0", agentB.count())
+	}
+
+	// The agent (or its mark_handled call) has already drained reply-to-a —
+	// simulate that so the second sweep's burst is just the new reply, not
+	// both coalesced into one dispatch.
+	if err := st.MarkHandled(chat, "reply-to-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply-to-b", Text: "respuesta para B", TS: 4, QuotedID: "boss-out-b"}); err != nil {
+		t.Fatal(err)
+	}
+	pusher.sweepOnce()
+	if len(agentB.calls) != 1 || agentB.calls[0] != "agent-b-term" {
+		t.Errorf("after replying to B: agentB calls = %v, want exactly one to agent-b-term", agentB.calls)
+	}
+	if agentA.count() != 1 {
+		t.Errorf("after replying to B: agentA was called %d times, want still 1 (must not be re-triggered)", agentA.count())
+	}
+}
+
+// TestNoQuotedIDUsesTodaysPrecedence: a plain message with no QuotedID is
+// completely unaffected by T43 — a boss chat still dispatches straight to
+// the principal, exactly as before.
+func TestNoQuotedIDUsesTodaysPrecedence(t *testing.T) {
+	chat := "55500000032@c.us"
+	st, _, _, principal, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "m1", Text: "hola, sin citar nada", TS: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	if len(principal.calls) != 1 || principal.calls[0] != "port-fallback" {
+		t.Errorf("principal injector calls = %v, want exactly one to port-fallback", principal.calls)
+	}
+}
+
+// TestReplyToNonAgentMessageFallsBackToPrincipal: the quoted message exists
+// but has no OriginTerminalID (a normal AI/human reply, not one sent via
+// send_to_boss) — nothing to route to, so today's precedence applies.
+func TestReplyToNonAgentMessageFallsBackToPrincipal(t *testing.T) {
+	chat := "55500000033@c.us"
+	st, _, _, principal, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out", FromMe: true, Text: "una respuesta normal"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply1", Text: "respondiendo a algo que no mandó un agente", TS: 2, QuotedID: "boss-out"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	if len(principal.calls) != 1 || principal.calls[0] != "port-fallback" {
+		t.Errorf("principal injector calls = %v, want exactly one to port-fallback — quoting a non-agent message must not change routing", principal.calls)
+	}
+}
+
+// TestReplyToAgentWithoutLiveInjectorFallsBackToPrincipal: the quoted
+// message DOES have an OriginTerminalID, but that agent has no injector
+// registered (never connected, or connected and gone) — must fall back to
+// the principal, not strand the message on a dead terminal_id.
+func TestReplyToAgentWithoutLiveInjectorFallsBackToPrincipal(t *testing.T) {
+	chat := "55500000034@c.us"
+	st, _, _, principal, pusher := newTestPusher(t, `{"allow_all":true,"default_mode":"dedicated","routes":[]}`)
+	// "ghost-term" is deliberately NEVER registered via RegisterInjector.
+
+	if err := st.TouchChat(chat, "Boss", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetIsBoss(chat, true); err != nil {
+		t.Fatal(err)
+	}
+	dedicate(t, st, chat)
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "boss-out", FromMe: true, Text: "[Fantasma] ya no está", TS: 1, OriginTerminalID: "ghost-term"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddMessage(store.Message{ChatJID: chat, ID: "reply1", Text: "respondiendo al fantasma", TS: 2, QuotedID: "boss-out"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pusher.sweepOnce()
+
+	if len(principal.calls) != 1 || principal.calls[0] != "port-fallback" {
+		t.Errorf("principal injector calls = %v, want exactly one to port-fallback — a reply to a departed agent must not get stranded", principal.calls)
+	}
+}
+
 // TestLevelDerivation covers AGENT-BEHAVIOR.md's level rule: is_boss ->
 // boss, is_approver -> approver (Aprobador P1, ct-2026-07-31-0610), a
 // never-seen ("new") contact -> danger, anything else -> caution.

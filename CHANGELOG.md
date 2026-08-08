@@ -10,6 +10,21 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.12 — 2026-08-08
+
+### Added
+- **Responder citando un mensaje ahora enruta al agente que lo escribió**
+  (T43, ct-2026-08-08-2043, pedido del dueño: "si yo le respondo a un
+  mensaje de un agente, se le responda a ese terminal... en un chat puedo
+  tener diferentes destinos, dependiendo a quién le respondo"). Antes, un
+  mensaje del dueño siempre iba al agente principal, sin excepción — ni
+  siquiera citando algo que había escrito otro agente por `send_to_boss`.
+  Ahora, si el mensaje citado lo mandó un agente registrado y ese agente
+  sigue con antena viva, la respuesta llega a ESE terminal — si no, cae
+  al comportamiento de siempre (al principal), sin quedar nunca trabada.
+
+---
+
 ## 0.1.11 — 2026-08-08
 
 ### Added
