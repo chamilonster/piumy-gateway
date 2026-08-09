@@ -10,6 +10,40 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.15 — 2026-08-08
+
+### Fixed
+- **Los flujos que 0.1.14 agregó al manual del operador tenían las llamadas
+  mal escritas** (T50, hallazgos de la revisión independiente de Peridot sobre
+  el trabajo de Citrino). El manual pasó a documentar las llamadas concretas,
+  pero varias no coincidían con el código: `send_message` y `draft` se
+  mostraban con `chat_id`/`text` cuando en realidad son `to`/`message` y
+  además exigen `model` y `policy_version`; `claim_chat`/`release_chat`
+  omitían `model`; `mark_handled` usaba un nombre de parámetro inexistente;
+  `get_media` se presentaba como si bajara un medio cuando lista los
+  recientes; y `escalate` aparecía recibiendo un motivo que la herramienta no
+  acepta ni registra. Un agente que siguiera esos flujos al pie de la letra
+  fallaba. Todas las llamadas del manual se verificaron una por una contra las
+  firmas reales del código.
+- **El manual decía que aprobar un borrador exige ser el dueño.** Exige un
+  despacho de nivel dueño **o aprobador** — y aprobar es justamente lo único
+  que concede el pin de aprobador. Un aprobador que leyera el manual creía que
+  no podía hacer lo único para lo que existe. Queda documentado también que
+  `approve_draft` acepta un texto de reemplazo: corregir y aprobar en un paso.
+- **El manual prometía que una respuesta citada no se pierde si el agente está
+  desconectado.** No es así cuando el agente no tiene antena: el aviso al dueño
+  cierra esa respuesta y el agente no la ve al volver. Solo sobrevive el caso
+  del corte breve con la antena configurada. El manual ahora dice cuál es cuál,
+  y que no conviene dejar un hilo abierto antes de desconectarse.
+- El ritual no mencionaba `get_decision_policy`, que es obligatorio antes de
+  enviar para todo agente que no sea el principal. Ahora es el paso 4.
+- Las herramientas de gestión del plantel de agentes (`list_agents`,
+  `set_agent_capi`, `assign_chat_to_agent`, `delete_agent`) no figuraban en
+  ninguna de las dos listas; ahora están donde corresponde, del lado de lo que
+  un operador no toca.
+
+---
+
 ## 0.1.14 — 2026-08-08
 
 ### Changed
