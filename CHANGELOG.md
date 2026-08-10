@@ -10,6 +10,21 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.19 — 2026-08-10
+
+### Fixed
+- **El instalador ahora verifica que el programa se haya actualizado de
+  verdad** (T54, ct-2026-08-10-1934). Instalando con Piumy corriendo, el
+  instalador podía cerrar el proceso, completar la configuración, y
+  reportarse como exitoso sin haber reemplazado el programa — la versión
+  anterior seguía corriendo, sin ningún aviso. Ahora, después de instalar,
+  se compara el programa que quedó contra el que el instalador traía; si
+  no coinciden, avisa claramente que probablemente algo lo tenía abierto
+  o un antivirus lo bloqueó, y pide cerrar Piumy y reintentar — en vez de
+  quedarse callado.
+
+---
+
 ## 0.1.18 — 2026-08-10
 
 ### Added

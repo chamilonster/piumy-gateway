@@ -158,6 +158,48 @@ solo los campos que sus propios paquetes necesitan.
     `json.load` de Python — no "se ve bien", parsea de verdad — y el
     valor de cada clave agregada coincide con el de la plantilla nueva,
     mientras el resto conserva el valor que ya tenía.
+  - **T54 (ct-2026-08-10-1934) — el instalador verifica que Piumy.exe se
+    reemplazó de verdad, no solo que Inno dijo que sí:** Citrino instaló
+    0.1.17 con el gateway corriendo — el instalador cerró el proceso,
+    completó el config, y NO reemplazó `Piumy.exe`; quedó el binario
+    viejo, sin ningún error. Diagnóstico (las 4 hipótesis de Citrino,
+    contra una instalación descartable propia, nunca la del dueño): el
+    cierre corre antes de copiar (confirmado leyendo el código);
+    `AppMutex` coincide carácter por carácter con `appmutex_windows.go`;
+    el mecanismo de cierre+copia no se pudo reproducir fallando ni con el
+    binario real corriendo aislado, ni a nivel de sistema (`taskkill` +
+    `Copy-Item`, 6 iteraciones con hash real) — lo que SÍ es cierto,
+    verificable por lectura: el código nunca comprobaba el resultado de
+    la copia. Por eso no daba error, sea cual sea la causa puntual
+    (timing, antivirus) que Citrino decidió no perseguir más.
+
+    La verificación NO es por versión (medido: el binario no trae
+    `VersionInfo` embebido — `Get-Item .VersionInfo` da `0.0.0.0`;
+    `piumy_windows_amd64.syso` es un archivo estático de julio, solo
+    ícono, nunca regenerado; reintroducir `goversioninfo` para arreglarlo
+    fue evaluado y descartado — el mensaje del commit que creó el .syso
+    ya decía "sin goversioninfo, zero-deps", y además ataría
+    `build-all.sh` a tener red). Tampoco es por fecha (reinstalar la
+    misma build no la mueve, medido). Es SHA-256 del archivo: `#define
+    MyBuiltExeHash GetSHA256OfFile(MyBuiltExe)` (ISPP, tiempo de
+    compilación, sobre el binario que se empaqueta) contra
+    `ExeWasReplaced` (Pascal Scripting, misma función con el mismo
+    nombre, motor distinto — ambas confirmadas existentes en Inno 6.7.3
+    antes de codear, extrayendo el .chm de ayuda) sobre el `Piumy.exe`
+    que quedó en disco, al principio de `ssPostInstall`, antes de tocar
+    config o cualquier otra cosa. Si no coincide: `Log` siempre +
+    `MsgBox` si hay alguien mirando + `Exit` sin arrancar la app (mismo
+    patrón que el propio bloque de config ya usaba para su caso de
+    "no se pudo escribir el archivo" — T22). Reinstalar la MISMA build
+    sobre sí misma no falla: el hash esperado y el que queda coinciden
+    igual, se haya copiado byte a byte o no hiciera falta tocarlo — la
+    garantía que importa. Verificado con un `.iss` standalone propio
+    (nombre de proceso e `AppId` distintos — nunca toca el Piumy real)
+    que corre el algoritmo REAL: caso positivo (hash coincide) sin error;
+    caso negativo forzado (el hash esperado se calculó sobre un binario
+    y `[Files]` copia otro) detectado y logueado, incluso DESPUÉS de que
+    Inno ya había registrado "Installation process succeeded" — el
+    síntoma exacto que Citrino reportó.
 - `DispatchDebounce` (`PIUMY_DISPATCH_DEBOUNCE`, default `60s`) — ventana de silencio antes de despachar un chat (ct-2026-07-13-2243).
 - `MaxDispatchDebounce` (`PIUMY_MAX_DISPATCH_DEBOUNCE`, default `5m`) — techo anti-infinito: si el chat lleva más de este tiempo pendiente se despacha igual, sin importar el silencio (ct-2026-07-13-2243).
 - `SMTPHost/Port/User/Pass/From` (`PIUMY_SMTP_HOST` sin default —

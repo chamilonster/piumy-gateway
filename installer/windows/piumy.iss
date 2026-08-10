@@ -26,6 +26,17 @@
 #define MyAppPublisher "Piumy"
 #define MyAppExeName "Piumy.exe"
 #define MyBuiltExe "..\..\dist\piumy-gateway-windows-amd64.exe"
+; T54 (ct-2026-08-10-1934): SHA-256 del binario que este instalador
+; empaqueta, calculado en TIEMPO DE COMPILACIÓN (ISPP's GetSHA256OfFile —
+; distinto de Pascal Scripting's propia GetSHA256OfFile, misma firma, dos
+; motores). CurStepChanged compara esto contra el hash del archivo que
+; QUEDÓ en disco tras instalar — no la versión (el binario no trae
+; VersionInfo embebido, medido: 0.0.0.0) ni la fecha (reinstalar la misma
+; build no la cambia, lo medido antes de escribir esto). Responde la
+; única pregunta que importa: "¿el que quedó es el que traía este
+; instalador?" — y de paso detecta un archivo corrupto o a medio copiar,
+; no solo uno viejo.
+#define MyBuiltExeHash GetSHA256OfFile(MyBuiltExe)
 
 [Setup]
 ; GUID fijo generado una sola vez (2026-07-31) — Inno lo usa para
@@ -1135,15 +1146,60 @@ begin
     SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
 
+{ ExeWasReplaced: T54 (ct-2026-08-10-1934) — el hallazgo de Citrino: si
+  Piumy estaba corriendo, el instalador podía cerrar el proceso y de
+  todos modos NO reemplazar Piumy.exe — sin ningún error. Verificado
+  contra el código (CloseRunningInstance corre antes que cualquier otra
+  cosa, el AppMutex coincide carácter por carácter con appmutex_windows.go)
+  y contra una instalación descartable propia (el mecanismo real, con el
+  binario real corriendo, no reprodujo el race en esta máquina — pero eso
+  no importa: el código nunca verificaba el resultado de la copia, así
+  que cualquier causa transitoria (antivirus, timing del sistema del
+  usuario) podía colarse en silencio. Compara el SHA-256 del ejecutable
+  YA INSTALADO contra el que trae este instalador ({#MyBuiltExeHash},
+  calculado en tiempo de compilación) — no la versión (el binario no trae
+  VersionInfo embebido) ni la fecha (reinstalar la misma build no la
+  mueve). Envuelto en try/except: GetSHA256OfFile lanza una excepción si
+  el archivo no se puede leer — ese caso también es "no coincide", nunca
+  un crash sin explicación. }
+function ExeWasReplaced(const ExePath: String): Boolean;
+var
+  InstalledHash: String;
+begin
+  Result := False;
+  try
+    InstalledHash := GetSHA256OfFile(ExePath);
+    Result := InstalledHash = '{#MyBuiltExeHash}';
+  except
+    Log('Piumy: no se pudo calcular el hash de ' + ExePath + ' tras instalar: ' + GetExceptionMessage);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigJSON: String;
   ConfigOK: Boolean;
   ConfigPath: String;
   ExistingConfigRaw: AnsiString;
+  ExePath: String;
 begin
   if CurStep = ssPostInstall then
   begin
+    { T54: chequeo PRIMERO, antes de tocar config o cualquier otra cosa —
+      si el ejecutable no se reemplazó, nada de lo que sigue tiene sentido
+      hacer (mucho menos arrancar la versión vieja como si fuera la
+      nueva). }
+    ExePath := ExpandConstant('{app}\{#MyAppExeName}');
+    if not ExeWasReplaced(ExePath) then
+    begin
+      Log('Piumy: el ejecutable instalado no coincide con el que trae este instalador (SHA-256 distinto) — probablemente algo lo tenía abierto o un antivirus lo retuvo durante la copia. La app NO se arranca, queda la versión anterior.');
+      if not WizardSilent then
+        MsgBox('Piumy no pudo actualizar su programa principal (Piumy.exe).' + #13#10 + #13#10 +
+          'Probablemente estaba en uso, o un antivirus lo bloqueó durante la instalación — sigue corriendo la versión anterior.' + #13#10 + #13#10 +
+          'Cierre Piumy por completo (ícono junto al reloj, clic derecho, Salir) y vuelva a ejecutar este instalador.', mbError, MB_OK);
+      Exit;
+    end;
+
     ForceDirectories(ExpandConstant('{app}\secrets\media'));
     ForceDirectories(ExpandConstant('{app}\secrets\backups'));
 
