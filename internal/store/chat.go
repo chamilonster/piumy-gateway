@@ -436,19 +436,28 @@ func (s *Store) SetIsApprover(jid string, isApprover bool) error {
 
 // BossJIDs returns the JIDs of every chat marked is_boss — the password
 // recovery code's fan-out list (S1e-1, ct-2026-07-19-1652), alongside the
-// gateway's own number.
+// gateway's own number. Device suffixes are stripped and duplicates
+// collapsed (T52, ct-2026-08-10-1837): a ghost row with the device-suffix
+// form and the real row are the same destination — sending to both would
+// duplicate the message.
 func (s *Store) BossJIDs() ([]string, error) {
 	rows, err := s.db.Query(`SELECT jid FROM chats WHERE is_boss = 1`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	seen := map[string]struct{}{}
 	var jids []string
 	for rows.Next() {
 		var jid string
 		if err := rows.Scan(&jid); err != nil {
 			return nil, err
 		}
+		jid = StripDeviceSuffix(jid)
+		if _, dup := seen[jid]; dup {
+			continue
+		}
+		seen[jid] = struct{}{}
 		jids = append(jids, jid)
 	}
 	return jids, rows.Err()

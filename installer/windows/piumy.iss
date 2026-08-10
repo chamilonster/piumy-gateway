@@ -463,6 +463,134 @@ begin
   end;
 end;
 
+{ ConfigHasKey: mismo chequeo que ReadConfigJSONValue usa para reconocer
+  una línea de KeyName, sin extraer su valor — lo único que
+  CompleteConfigJSON necesita para decidir "¿esta clave ya está?". }
+function ConfigHasKey(const Lines: TArrayOfString; const KeyName: String): Boolean;
+var
+  i: Integer;
+  Line: String;
+begin
+  Result := False;
+  for i := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := TrimStr(Lines[i]);
+    if Copy(Line, 1, Length(KeyName) + 2) = '"' + KeyName + '"' then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+{ CompleteConfigJSON: T51 (ct-2026-08-10-1826) — actualizar reescribía
+  piumy-config.json entero desde la plantilla fija de este instalador, así
+  que cualquier clave que el usuario hubiera agregado a mano
+  (PIUMY_DEFAULT_TERMINAL_ID es el caso real que lo hizo visible)
+  desaparecía sin aviso en la próxima instalación. ExistingRaw es el
+  archivo que YA estaba en disco; NewJSON es la plantilla completa que
+  este instalador arma más abajo (mismo texto de siempre). Devuelve
+  ExistingRaw con las claves de NewJSON que le falten agregadas ANTES del
+  cierre — nunca toca una línea que el archivo ya tenía, sea una clave
+  conocida por este instalador o no. Si el archivo ya tiene las 9/10
+  claves, es un no-op textual (ni siquiera reordena).
+
+  No es un parser JSON — mismo espíritu que ReadConfigJSONValue (el propio
+  .iss ya advierte no inventar uno en Pascal, T11): trabaja línea por
+  línea, sobre el formato fijo (un par por línea) que este mismo bloque
+  escribe siempre. }
+function CompleteConfigJSON(const ExistingRaw, NewJSON: String): String;
+var
+  ExistingLines, NewLines, ToAdd: TArrayOfString;
+  i, closeIdx, addCount, quotePos: Integer;
+  Trimmed, KeyName, LastContentLine, Output: String;
+begin
+  ExistingLines := SplitLines(ExistingRaw);
+  NewLines := SplitLines(NewJSON);
+
+  { Recolectar, de la plantilla, las líneas "CLAVE": "valor" cuya CLAVE
+    todavía no esté en el archivo existente. }
+  SetArrayLength(ToAdd, 0);
+  addCount := 0;
+  for i := 0 to GetArrayLength(NewLines) - 1 do
+  begin
+    Trimmed := TrimStr(NewLines[i]);
+    if (Trimmed = '') or (Copy(Trimmed, 1, 1) <> '"') then
+      Continue; { salta la apertura, el cierre y las líneas en blanco — solo pares clave/valor }
+    quotePos := Pos('"', Copy(Trimmed, 2, MaxInt));
+    if quotePos = 0 then
+      Continue;
+    KeyName := Copy(Trimmed, 2, quotePos - 1);
+    if ConfigHasKey(ExistingLines, KeyName) then
+      Continue;
+    { Normalizar ACÁ, no al escribir (Citrino, bug real encontrado antes
+      de integrar): las líneas de la plantilla vienen con coma final
+      salvo la última (ver cómo arma ConfigJSON, más abajo) — guardar esa
+      coma en ToAdd y agregar otra según la posición al escribir producía
+      doble coma, o coma colgante antes del cierre si la única clave
+      faltante (addCount=1) entraba por la rama "no es la última" con su
+      coma original todavía puesta. ToAdd guarda pares SIN coma — la
+      lógica de "coma en todos menos el último", más abajo, pasa a ser la
+      única fuente de comas y queda correcta tal como está escrita. }
+    if Copy(Trimmed, Length(Trimmed), 1) = ',' then
+      Trimmed := Copy(Trimmed, 1, Length(Trimmed) - 1);
+    SetArrayLength(ToAdd, addCount + 1);
+    ToAdd[addCount] := Trimmed;
+    addCount := addCount + 1;
+  end;
+
+  if addCount = 0 then
+  begin
+    Result := ExistingRaw; { ya tiene todo — no tocar ni un byte }
+    Exit;
+  end;
+
+  { Ubicar la línea de cierre — la última línea no vacía del archivo. }
+  closeIdx := -1;
+  for i := GetArrayLength(ExistingLines) - 1 downto 0 do
+  begin
+    if TrimStr(ExistingLines[i]) <> '' then
+    begin
+      closeIdx := i;
+      Break;
+    end;
+  end;
+  if (closeIdx < 1) or (Copy(TrimStr(ExistingLines[closeIdx]), 1, 1) <> '}') then
+  begin
+    { Formato irreconocible — no debería pasar nunca (ResolveKeys ya
+      validó que las 3 claves base se pudieron leer de este mismo
+      archivo), pero si pasa, no arriesgar un archivo corrupto: devolver
+      tal cual, sin completar. }
+    Result := ExistingRaw;
+    Exit;
+  end;
+
+  { Reconstruir: todo lo anterior a la última línea de contenido, sin
+    tocar una letra; la última línea de contenido, con coma agregada si
+    le faltaba (JSON válido antes de sumar más pares); las claves nuevas,
+    coma en todas menos la última; el cierre, igual que estaba. }
+  Output := '';
+  for i := 0 to closeIdx - 2 do
+    Output := Output + ExistingLines[i] + #13#10;
+
+  LastContentLine := ExistingLines[closeIdx - 1];
+  Trimmed := TrimStr(LastContentLine);
+  if (Trimmed <> '') and (Copy(Trimmed, Length(Trimmed), 1) <> ',') then
+    LastContentLine := LastContentLine + ',';
+  Output := Output + LastContentLine + #13#10;
+
+  for i := 0 to addCount - 1 do
+  begin
+    if i < addCount - 1 then
+      Output := Output + '  ' + ToAdd[i] + ',' + #13#10
+    else
+      Output := Output + '  ' + ToAdd[i] + #13#10;
+  end;
+  Output := Output + ExistingLines[closeIdx] + #13#10;
+
+  Result := Output;
+end;
+
 { FinalizeKeys: la validación COMPARTIDA entre las dos fuentes que
   ResolveKeys puede leer (piumy-config.json o un run-piumy.bat viejo) —
   exige que las 3 claves base (MCP/REST/BACKUP, las que TODA versión
@@ -1011,6 +1139,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigJSON: String;
   ConfigOK: Boolean;
+  ConfigPath: String;
+  ExistingConfigRaw: AnsiString;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1048,6 +1178,20 @@ begin
       ConfigJSON := ConfigJSON + ',' + #13#10 + '  "PIUMY_REST_ADDR": "' + JSONEscape(ResolvedRestAddr) + '"';
     ConfigJSON := ConfigJSON + #13#10 + '}' + #13#10;
 
+    { T51 (ct-2026-08-10-1826): si piumy-config.json YA existe, no
+      reescribirlo desde la plantilla de arriba — eso descartaba
+      cualquier clave que el usuario hubiera agregado a mano
+      (PIUMY_DEFAULT_TERMINAL_ID es el caso real que lo hizo visible,
+      perdido en vivo instalando 0.1.16). CompleteConfigJSON completa en
+      vez de reemplazar: agrega solo lo que falte, conserva el resto
+      textual. LoadStringFromFile puede fallar (permisos, antivirus) — en
+      ese caso seguir con la plantilla de siempre, ResolveKeys ya validó
+      antes que este mismo archivo se pudo leer una vez; no vale la pena
+      abortar acá por una segunda lectura que falle. }
+    ConfigPath := ExpandConstant('{app}\piumy-config.json');
+    if FileExists(ConfigPath) and LoadStringFromFile(ConfigPath, ExistingConfigRaw) then
+      ConfigJSON := CompleteConfigJSON(ExistingConfigRaw, ConfigJSON);
+
     { T22 (ct-2026-08-05-1455, R3 de Amatista, hueco 2): esta escritura no
       se chequeaba (entonces era run-piumy.bat; mismo riesgo, mismo
       arreglo, ahora en piumy-config.json). Un antivirus bloqueando la
@@ -1064,7 +1208,7 @@ begin
       se avisa honesto y se corta ANTES de arrancar la app, para que las
       claves generadas nunca lleguen a cifrar nada que después no se
       pueda leer. }
-    ConfigOK := SaveStringToFile(ExpandConstant('{app}\piumy-config.json'), ConfigJSON, False);
+    ConfigOK := SaveStringToFile(ConfigPath, ConfigJSON, False);
     if not ConfigOK then
     begin
       Log('Piumy: no se pudo escribir piumy-config.json — probablemente un antivirus bloqueando la creación del archivo, o permisos. La app NO se arranca (evita cifrar un backup con claves que solo existen en este proceso y se pierden al cerrarlo).');

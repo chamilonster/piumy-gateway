@@ -116,6 +116,48 @@ solo los campos que sus propios paquetes necesitan.
     directamente desde T11 — ver `docs/T11-DIAGRAMA-CONFIG-FILE-NO-BAT.md`
     para el flujo completo (por qué `.vbs`/`.bat` salieron del camino de
     arranque, y cómo `ResolveKeys` prueba 3 fuentes en orden).
+  - **T51 (ct-2026-08-10-1826) — `CompleteConfigJSON`, no reescribir un
+    `piumy-config.json` existente:** `ResolveKeys` solo LEE 4 claves
+    conocidas (MCP/REST/BACKUP + `PIUMY_REST_ADDR` opcional); hasta T51,
+    `CurStepChanged` después REESCRIBÍA el archivo entero desde la
+    plantilla fija de 9/10 líneas — cualquier variable que el usuario
+    hubiera agregado a mano y el instalador no conociera (el caso real:
+    Citrino perdió `PIUMY_DEFAULT_TERMINAL_ID` al actualizar a 0.1.16, en
+    vivo, sin ningún aviso) desaparecía en la próxima instalación. Ahora,
+    si el archivo ya existe, `CompleteConfigJSON(ExistingRaw, NewJSON)`
+    (más `ConfigHasKey`, el mismo chequeo de línea que ya usaba
+    `ReadConfigJSONValue`) trabaja línea por línea — mismo espíritu que el
+    resto de este bloque, nunca un parser JSON en Pascal (T11 ya lo
+    advierte): conserva TEXTUALMENTE cada línea del archivo existente
+    (conocida por el instalador o no) y solo agrega, antes del cierre, las
+    líneas de la plantilla cuya clave todavía no esté — asegurando coma en
+    la última línea de contenido si hacía falta para seguir siendo JSON
+    válido. Si el archivo ya tiene las 9/10 claves (el caso normal), es un
+    no-op textual — verificado instalando de verdad, no razonando sobre el
+    script: dos instalaciones reales sobre la instalación del dueño
+    (`piumy-config.json` con `PIUMY_DEFAULT_TERMINAL_ID` real, y con una
+    segunda clave de prueba agregada a mano) dieron hash SHA-256 idéntico
+    antes y después.
+    **Bug encontrado por Citrino antes de integrar, en el camino que SÍ
+    agrega algo** (el "no-op" de arriba nunca lo ejercitaba): las líneas
+    de la plantilla ya vienen con coma final salvo la última (ver
+    `ConfigJSON` más abajo). La primera versión guardaba `Trimmed` tal
+    cual en `ToAdd` —con su coma— y volvía a decidir la coma según la
+    posición al escribir: doble coma si la línea ya la traía y no era la
+    última, o coma colgante antes del cierre si la ÚNICA clave que
+    faltaba (`addCount=1`) conservaba la suya. Las dos formas rompen el
+    JSON — el gateway no arranca. Arreglo: sacarle la coma a `Trimmed`
+    AL RECOLECTAR (antes de guardarlo en `ToAdd`), no al escribir —
+    `ToAdd` guarda pares limpios, y la lógica de "coma en todos menos el
+    último" pasa a ser correcta tal como estaba escrita. Verificado con
+    una instalación aislada standalone (su propio `.iss` mínimo, sin
+    `AppMutex` ni `CloseRunningInstance` — nunca toca el Piumy real) que
+    corre la función real contra un archivo al que le falta
+    `PIUMY_MEDIA_DIR` (clave del medio de la plantilla) y otra al que le
+    faltan dos claves no consecutivas; el resultado se parseó con
+    `json.load` de Python — no "se ve bien", parsea de verdad — y el
+    valor de cada clave agregada coincide con el de la plantilla nueva,
+    mientras el resto conserva el valor que ya tenía.
 - `DispatchDebounce` (`PIUMY_DISPATCH_DEBOUNCE`, default `60s`) — ventana de silencio antes de despachar un chat (ct-2026-07-13-2243).
 - `MaxDispatchDebounce` (`PIUMY_MAX_DISPATCH_DEBOUNCE`, default `5m`) — techo anti-infinito: si el chat lleva más de este tiempo pendiente se despacha igual, sin importar el silencio (ct-2026-07-13-2243).
 - `SMTPHost/Port/User/Pass/From` (`PIUMY_SMTP_HOST` sin default —

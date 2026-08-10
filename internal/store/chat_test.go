@@ -1026,3 +1026,56 @@ func TestChatOriginIgnoresProtocolNoise(t *testing.T) {
 		t.Errorf("ChatOrigin with only a content-less message row = %q, want group_discovered (protocol noise isn't a conversation)", origin)
 	}
 }
+
+// TestBossJIDsDeduplicatesDeviceSuffix is T52's primary case
+// (ct-2026-08-10-1837): a ghost row with device suffix and the real row for
+// the same number are the same destination — BossJIDs must return one, not
+// two, or every send_to_boss / recovery code produces a visible duplicate.
+func TestBossJIDsDeduplicatesDeviceSuffix(t *testing.T) {
+	s := openTestStore(t)
+
+	const ghost = "555000001:15@s.whatsapp.net"
+	const real = "555000001@s.whatsapp.net"
+
+	if err := s.SetIsBoss(ghost, true); err != nil {
+		t.Fatalf("SetIsBoss ghost: %v", err)
+	}
+	if err := s.SetIsBoss(real, true); err != nil {
+		t.Fatalf("SetIsBoss real: %v", err)
+	}
+
+	jids, err := s.BossJIDs()
+	if err != nil {
+		t.Fatalf("BossJIDs: %v", err)
+	}
+	if len(jids) != 1 {
+		t.Fatalf("BossJIDs returned %d entries, want 1: %v", len(jids), jids)
+	}
+	if jids[0] != real {
+		t.Errorf("BossJIDs[0] = %q, want %q", jids[0], real)
+	}
+}
+
+// TestBossJIDsPreservesDistinctNumbers verifies that deduplication only
+// collapses entries for the same underlying number, not different ones.
+func TestBossJIDsPreservesDistinctNumbers(t *testing.T) {
+	s := openTestStore(t)
+
+	const a = "555000001@s.whatsapp.net"
+	const b = "555000002@s.whatsapp.net"
+
+	if err := s.SetIsBoss(a, true); err != nil {
+		t.Fatalf("SetIsBoss a: %v", err)
+	}
+	if err := s.SetIsBoss(b, true); err != nil {
+		t.Fatalf("SetIsBoss b: %v", err)
+	}
+
+	jids, err := s.BossJIDs()
+	if err != nil {
+		t.Fatalf("BossJIDs: %v", err)
+	}
+	if len(jids) != 2 {
+		t.Fatalf("BossJIDs returned %d entries, want 2: %v", len(jids), jids)
+	}
+}

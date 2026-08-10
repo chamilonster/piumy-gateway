@@ -10,6 +10,28 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.17 — 2026-08-10
+
+### Fixed
+- **El chat fantasma con sufijo de dispositivo ya no genera filas muertas en
+  el outbox** (T52, ct-2026-08-10-1837). `BossJIDs()` normalizaba y
+  deduplicaba antes de retornar — con el fantasma (`numero:15@s.whatsapp.net`,
+  `is_boss=1`) y la fila real del mismo número, cada `send_to_boss` y cada
+  recovery encolaban una fila inentregable. Dos piezas: `BossJIDs()` ahora
+  quita el sufijo y colapsa destinos idénticos (el duplicado visible es peor
+  que la fila muerta silenciosa); `Enqueue`/`EnqueueFromAgent` normalizan el
+  JID en el INSERT — defensa simétrica a T45 en la entrada.
+- **Actualizar Piumy ya no borra las variables de `piumy-config.json` que
+  el instalador no conoce** (T51, ct-2026-08-10-1826). Cada actualización
+  reescribía ese archivo entero desde su plantilla fija — cualquier
+  variable agregada a mano (`PIUMY_DEFAULT_TERMINAL_ID` es el caso real
+  que lo hizo visible) desaparecía sin aviso, y el gateway seguía
+  arrancando igual, solo que sin esa configuración. Ahora, si el archivo
+  ya existe, el instalador lo completa en vez de reemplazarlo: agrega
+  solo lo que le falte y conserva todo lo demás tal cual estaba.
+
+---
+
 ## 0.1.16 — 2026-08-10
 
 ### Fixed

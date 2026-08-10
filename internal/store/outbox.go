@@ -39,10 +39,12 @@ func (s *Store) Enqueue(toJID, text string, ts int64) error {
 // also records which model produced it (send_message via MCP). The model
 // travels with the outbox row until the pipeline actually sends it, at which
 // point it's copied onto the resulting messages row (with the real WhatsApp
-// message ID, so delivery/read receipts can match it).
+// message ID, so delivery/read receipts can match it). Device suffixes are
+// stripped (T52, ct-2026-08-10-1837) — symmetric with T45's normalization
+// on the inbound path.
 func (s *Store) EnqueueWithModel(toJID, text string, ts int64, model string) error {
 	_, err := s.db.Exec(`INSERT INTO outbox (to_jid, text, created_ts, model) VALUES (?, ?, ?, ?)`,
-		toJID, text, ts, nullIfEmpty(model))
+		StripDeviceSuffix(toJID), text, ts, nullIfEmpty(model))
 	return err
 }
 
@@ -51,10 +53,11 @@ func (s *Store) EnqueueWithModel(toJID, text string, ts int64, model string) err
 // every other outbound path, paced by the same anti-ban governor on drain.
 // originTerminalID travels to the resulting messages row once sent (see
 // OriginTerminalID's own doc); it is never a model attribution, so this
-// leaves outbox.model unset, unlike EnqueueWithModel.
+// leaves outbox.model unset, unlike EnqueueWithModel. Device suffixes are
+// stripped (T52, ct-2026-08-10-1837).
 func (s *Store) EnqueueFromAgent(toJID, text string, ts int64, originTerminalID string) error {
 	_, err := s.db.Exec(`INSERT INTO outbox (to_jid, text, created_ts, origin_terminal_id) VALUES (?, ?, ?, ?)`,
-		toJID, text, ts, originTerminalID)
+		StripDeviceSuffix(toJID), text, ts, originTerminalID)
 	return err
 }
 
