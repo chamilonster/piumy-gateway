@@ -14,6 +14,7 @@ import (
 	"piumy-gateway/internal/eventbus"
 	"piumy-gateway/internal/gateway"
 	"piumy-gateway/internal/state"
+	"piumy-gateway/internal/store"
 )
 
 // isSelfChat checks if the chat JID is our own number (same User+Server).
@@ -250,7 +251,20 @@ func (a *Adapter) recordOwnIdentity() {
 	if a.state == nil || a.client.Store.ID == nil {
 		return
 	}
-	ownJID := a.client.Store.ID.String()
+	// StripDeviceSuffix (T45, ct-2026-08-10-1424): client.Store.ID is the
+	// CONNECTED DEVICE's own identity, always device-qualified by design —
+	// the one producer of a suffixed jid in this whole codebase (every
+	// other inbound path already resolves through resolveChatJID).
+	// Normalizing here, at the source, matters beyond just what reaches the
+	// store: markOwner below calls TouchChat(jid) THEN
+	// MarkOwnerIfUntouched(jid) with the SAME jid — TouchChat's own
+	// StripDeviceSuffix (message.go/chat.go) would create the chat clean,
+	// but MarkOwnerIfUntouched is a plain UPDATE ... WHERE jid = ? with no
+	// normalization of its own; called with the raw suffixed jid, it
+	// matches zero rows, silently — the chat exists, clean, but never gets
+	// marked owner. Normalizing store-side alone isn't enough once a
+	// second call in the same caller reuses the un-normalized variable.
+	ownJID := store.StripDeviceSuffix(a.client.Store.ID.String())
 	ownName := a.client.Store.PushName
 	_ = a.state.Update(func(s *state.Status) {
 		s.OwnJID = ownJID

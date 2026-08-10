@@ -42,6 +42,107 @@ func TestTouchChatConfirmationModeByType(t *testing.T) {
 	}
 }
 
+// TestTouchChatStripsDeviceSuffix is T45's own reproduction
+// (ct-2026-08-10-1424): a JID carrying WhatsApp's device suffix
+// ("usuario:NN@s.whatsapp.net" — client.Store.ID's own form, never a
+// conversation identity) must land in the chat WITHOUT it, and must not
+// create a second, unreachable row alongside it — measured against the
+// owner's live installation, exactly this: their own account duplicated,
+// one row nothing could ever deliver to.
+func TestTouchChatStripsDeviceSuffix(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.TouchChat("55500000090:15@s.whatsapp.net", "Yo", 100); err != nil {
+		t.Fatalf("TouchChat: %v", err)
+	}
+
+	if _, ok, err := s.GetChat("55500000090:15@s.whatsapp.net"); err != nil || ok {
+		t.Errorf("GetChat(jid con sufijo) ok=%v err=%v, want ok=false — no debe quedar una fila bajo el jid crudo", ok, err)
+	}
+	c, ok, err := s.GetChat("55500000090@s.whatsapp.net")
+	if err != nil || !ok {
+		t.Fatalf("GetChat(jid limpio) ok=%v err=%v, want ok=true", ok, err)
+	}
+	if c.Name != "Yo" {
+		t.Errorf("Name = %q, want %q", c.Name, "Yo")
+	}
+
+	chats, err := s.ListChats(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chats) != 1 {
+		t.Errorf("ListChats = %d filas, want exactamente 1 — no debe crearse una segunda fila", len(chats))
+	}
+}
+
+// TestTouchChatLeavesLIDAndGroupJIDsUntouched: @lid and @g.us never carry a
+// device suffix and StripDeviceSuffix must leave them exactly as they came
+// — this only touches the @s.whatsapp.net form.
+func TestTouchChatLeavesLIDAndGroupJIDsUntouched(t *testing.T) {
+	s := openTestStore(t)
+	lid := "555000000000090@lid"
+	group := "555000000090@g.us"
+	if err := s.TouchChat(lid, "Alguien", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchChat(group, "Grupo", 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.GetChat(lid); err != nil || !ok {
+		t.Errorf("GetChat(@lid) ok=%v err=%v, want ok=true bajo el jid original, sin tocar", ok, err)
+	}
+	if _, ok, err := s.GetChat(group); err != nil || !ok {
+		t.Errorf("GetChat(@g.us) ok=%v err=%v, want ok=true bajo el jid original, sin tocar", ok, err)
+	}
+}
+
+// TestTouchChatWithAndWithoutSuffixMergeIntoOneChat is the reverse case
+// T45 flags as the one that matters: a real device suffix isn't a fixed
+// property of a number — it can arrive with the suffix on one event and
+// without it on the next (or vice versa). Both must land in the SAME row.
+func TestTouchChatWithAndWithoutSuffixMergeIntoOneChat(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.TouchChat("55500000091@s.whatsapp.net", "Primero", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchChat("55500000091:7@s.whatsapp.net", "Segundo", 200); err != nil {
+		t.Fatal(err)
+	}
+
+	c, ok, err := s.GetChat("55500000091@s.whatsapp.net")
+	if err != nil || !ok {
+		t.Fatalf("GetChat ok=%v err=%v, want ok=true", ok, err)
+	}
+	if c.LastTS != 200 {
+		t.Errorf("LastTS = %d, want 200 — el segundo TouchChat debe actualizar la MISMA fila, no crear otra", c.LastTS)
+	}
+
+	chats, err := s.ListChats(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chats) != 1 {
+		t.Errorf("ListChats = %d filas, want exactamente 1 — con y sin sufijo caen en el mismo chat", len(chats))
+	}
+}
+
+// TestStripDeviceSuffix is the unit-level coverage for the parsing itself —
+// the branches TouchChat/AddMessage's own tests exercise indirectly.
+func TestStripDeviceSuffix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"55500000090:15@s.whatsapp.net", "55500000090@s.whatsapp.net"},
+		{"55500000090@s.whatsapp.net", "55500000090@s.whatsapp.net"},
+		{"555000000000090@lid", "555000000000090@lid"},
+		{"555000000090@g.us", "555000000090@g.us"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := StripDeviceSuffix(c.in); got != c.want {
+			t.Errorf("StripDeviceSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // TestMigrateRequiredToAlwaysReconcilesLegacyValue covers the F4c audit
 // fix directly: a row a pre-fix build wrote with the legacy 'required'
 // value gets reconciled to 'always' on open (send_message's gate only

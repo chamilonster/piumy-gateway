@@ -42,7 +42,15 @@ type Message struct {
 // (chat_jid, id) — INSERT OR IGNORE makes a re-delivered/re-synced message
 // (open-wa can redeliver on reconnect) a harmless no-op instead of an error
 // or a duplicate row. Also touches the parent chat's name/last_ts.
+//
+// m.ChatJID is normalized (StripDeviceSuffix, T45) BEFORE it's used
+// anywhere in this function — TouchChat below normalizes its own jid
+// parameter too, but that's a local variable inside TouchChat; without
+// normalizing m.ChatJID here first, the INSERT below would still write the
+// device-qualified form into messages.chat_jid, orphaned from the
+// now-normalized chats.jid it's supposed to join against.
 func (s *Store) AddMessage(m Message) error {
+	m.ChatJID = StripDeviceSuffix(m.ChatJID)
 	if err := s.TouchChat(m.ChatJID, "", m.TS); err != nil {
 		return err
 	}

@@ -10,6 +10,19 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.16 — 2026-08-10
+
+### Fixed
+- **El sufijo de dispositivo de WhatsApp ya no crea chats duplicados** (T45,
+  ct-2026-08-10-1424). Medido contra la instalación real: de 200 chats,
+  exactamente uno tenía el formato `numero:NN@s.whatsapp.net` — la propia
+  cuenta del dueño, duplicada junto a la fila legítima sin sufijo, las dos
+  marcadas como dueño, y la del sufijo sin poder recibir nunca nada. Ahora
+  ese sufijo se quita antes de que cualquier chat o mensaje se guarde —
+  `@lid` y los grupos (`@g.us`) no se tocan, nunca lo llevan.
+
+---
+
 ## 0.1.15 — 2026-08-08
 
 ### Fixed

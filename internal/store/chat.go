@@ -146,6 +146,28 @@ func IsLIDJID(jid string) bool {
 	return strings.HasSuffix(jid, "@lid")
 }
 
+// StripDeviceSuffix removes WhatsApp's device suffix — "usuario:NN" becomes
+// "usuario" — from a phone-number JID (T45, ct-2026-08-10-1424). The suffix
+// names which DEVICE of an account (phone, web, tablet) sent something,
+// never a conversation: a chat is with the account, never with one of its
+// devices. Measured against the owner's live installation: exactly one of
+// 200 chats carried it — the owner's OWN account, from client.Store.ID
+// (always device-qualified by WhatsApp's own multi-device design), creating
+// a second is_boss row nothing could ever deliver to, alongside the real
+// one. @lid and @g.us never carry a device suffix and are returned
+// unchanged — this ONLY touches the @s.whatsapp.net form.
+func StripDeviceSuffix(jid string) string {
+	const server = "@s.whatsapp.net"
+	if !strings.HasSuffix(jid, server) {
+		return jid
+	}
+	user := strings.TrimSuffix(jid, server)
+	if colon := strings.IndexByte(user, ':'); colon >= 0 {
+		user = user[:colon]
+	}
+	return user + server
+}
+
 // StatusBroadcastJID is WhatsApp's reserved pseudo-chat for Status/Stories
 // updates — every contact's status lands here under this ONE shared jid,
 // never under a real person's or group's own jid. A `chats` row for it is
@@ -194,6 +216,7 @@ const realMessageSQL = `((text IS NOT NULL AND text != '') OR (type IS NOT NULL 
 // default (harmless no-op once source flips to 'manual' or the columns
 // already match).
 func (s *Store) TouchChat(jid, name string, ts int64) error {
+	jid = StripDeviceSuffix(jid)
 	status := "new"
 	confirmMode := "none"
 	configSource := "default"

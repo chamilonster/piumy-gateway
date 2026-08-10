@@ -143,6 +143,41 @@ Piumy. Ver `docs/F1A-STORE-ACCESO.md`.
   Exportado (ct-2026-07-10-1758, antes privado) para que callers fuera del
   package (`corepipeline`) compartan el mismo criterio en vez de duplicar
   el chequeo de sufijo — mismo espíritu que ya evitaba duplicar en `store`.
+- `StripDeviceSuffix(jid) string` (T45, ct-2026-08-10-1424) — quita el
+  sufijo de dispositivo de WhatsApp: `usuario:NN@s.whatsapp.net` →
+  `usuario@s.whatsapp.net`. `@lid` y `@g.us` nunca lo llevan, vuelven sin
+  tocar. Llamada al inicio de `TouchChat` (sobre `jid`) y al inicio de
+  `AddMessage` (sobre `m.ChatJID`, ANTES de usarlo en nada — si solo se
+  normalizara dentro de `TouchChat`, el `INSERT INTO messages` de
+  `AddMessage` seguiría escribiendo el jid crudo, desincronizando
+  `messages.chat_jid` de `chats.jid` y rompiendo el `JOIN` que usa
+  `PendingDedicated`). Red de seguridad genuina: los ~10 call sites de
+  `TouchChat`/`AddMessage` en todo el repo (whatsmeow, corepipeline,
+  restapi, y `AddMessage` mismo llamando `TouchChat` internamente) pasan,
+  sin excepción, por estas dos funciones — confirmado leyendo cada
+  llamador antes de codear, no asumido. Medido contra la instalación
+  real: de 200 chats, exactamente uno tenía sufijo — la propia cuenta del
+  dueño, desde `client.Store.ID` (`whatsmeow.recordOwnIdentity`), siempre
+  device-qualified por diseño multi-dispositivo de WhatsApp, duplicada
+  junto a la fila legítima sin sufijo, marcada `is_boss` las dos, y la
+  del sufijo sin poder recibir nada nunca.
+  **Regresión encontrada por Citrino antes de integrar (misma tarea,
+  segunda vuelta):** normalizar solo acá NO alcanzaba. `markOwner`
+  (`inbound.go`) llama `TouchChat(jid)` y LUEGO `MarkOwnerIfUntouched(jid)`
+  con la MISMA variable — `TouchChat` normaliza y crea el chat limpio,
+  pero `MarkOwnerIfUntouched` es un `UPDATE chats SET is_boss=1 WHERE
+  jid = ?` puro, sin normalización propia; llamado con el jid crudo no
+  matchea ninguna fila, sin error — el chat queda creado y limpio, pero
+  SIN marcar como dueño (rompía T12, el auto-mark del propio número en
+  una instalación nueva). El arreglo real y más chico: normalizar en el
+  ORIGEN, `recordOwnIdentity` (`ownJID := store.StripDeviceSuffix(a.client.Store.ID.String())`)
+  — el único productor de un jid con sufijo en todo el repo (todo lo
+  demás ya resuelve vía `resolveChatJID`) — así que `markOwner` recibe el
+  jid ya limpio en las dos llamadas, y de paso `state.Status.OwnJID`
+  (`GET /api/status`) también queda limpio. `StripDeviceSuffix` dentro de
+  `TouchChat`/`AddMessage` se queda como red de seguridad — no arregla
+  esta costura puntual, pero atrapa el chat fantasma si aparece otro
+  productor de jids con sufijo en el futuro.
 - `TouchChat(jid, name, ts)` — upsert de last-seen; default de `status`/`confirmation_mode` por tipo: 1-1 → `none`, grupo → `always` (F4c audit: era `required`, el esquema legacy de Piumy — `send_message` chequea `== "always"`, `"required"` nunca matcheaba, el fail-safe quedaba muerto para grupos frescos; `migrateRequiredToAlways` en `schema.go` reconcilia filas viejas). `name=""` es un no-op sobre el nombre ya guardado (el upsert solo pisa si el nuevo valor es no-vacío) — la garantía que usa `corepipeline.handleInbound` para no pisar el nombre de un grupo (ver abajo).
 - `SetMode(jid, mode)` — DELIBERADO: `set_mode`/`escalate` (MCP) y el
   endpoint REST admin lo llaman. Marca `mode_source='manual'`, así

@@ -16,6 +16,7 @@ import (
 
 	"piumy-gateway/internal/governor"
 	"piumy-gateway/internal/state"
+	"piumy-gateway/internal/store"
 )
 
 // seedFakeDevice inserts a device row directly (bypassing PutDevice, which
@@ -24,6 +25,18 @@ import (
 // session without a real WhatsApp account. Byte lengths match
 // whatsmeow_device's own CHECK constraints (00-latest-schema.sql).
 func seedFakeDevice(t *testing.T, dbPath string) {
+	t.Helper()
+	seedFakeDeviceWithJID(t, dbPath, "5550000000000.0:0@s.whatsapp.net")
+}
+
+// seedFakeDeviceWithJID is seedFakeDevice's own insert, parameterized on
+// jid (T45, ct-2026-08-10-1424): seedFakeDevice's hardcoded ":0" device
+// never exercises the real bug — whatsmeow's own JID.String() omits a
+// zero device, so every existing recordOwnIdentity test got a clean jid
+// "by accident" and never could have caught this. A regression test needs
+// a NONZERO device (the real cut observed on the owner's installation was
+// ":15") to actually reproduce it.
+func seedFakeDeviceWithJID(t *testing.T, dbPath, jid string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath))
 	if err != nil {
@@ -41,7 +54,7 @@ func seedFakeDevice(t *testing.T, dbPath string) {
 		 adv_key, adv_details, adv_account_sig, adv_account_sig_key, adv_device_sig,
 		 platform, business_name, push_name, facebook_uuid, lid_migration_ts)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"5550000000000.0:0@s.whatsapp.net", nil, 1, b32, b32,
+		jid, nil, 1, b32, b32,
 		b32, 1, b64,
 		dummy, dummy, b64, b32, b64,
 		"", "", "", nil, 0)
@@ -301,5 +314,57 @@ func TestRecordOwnIdentityPreservesKnownNameWhenPushNameEmpty(t *testing.T) {
 
 	if got := sm.Snapshot().OwnName; got != "Bigot Mckuco, Clever.cat" {
 		t.Errorf("OwnName = %q after recordOwnIdentity with an empty Store.PushName, want the previously known name preserved", got)
+	}
+}
+
+// TestRecordOwnIdentityStripsDeviceSuffixBeforeMarkingOwner is T45's
+// missing test (Citrino froze the integration over this): the real bug
+// lived in the SEAM between markOwner's two calls, TouchChat(jid) then
+// MarkOwnerIfUntouched(jid) — TouchChat normalizes and creates the chat
+// clean, but MarkOwnerIfUntouched is a plain `UPDATE ... WHERE jid = ?`
+// with no normalization of its own; called with the SAME still-suffixed
+// jid variable, it matches zero rows, silently. T45's original 5 tests
+// exercised TouchChat and AddMessage in isolation — none went through
+// markOwner (or recordOwnIdentity, its only real caller) end-to-end, so
+// none could have caught this. seedFakeDevice's own ":0" device would not
+// have reproduced it either (whatsmeow's JID.String() omits a zero
+// device) — this uses seedFakeDeviceWithJID with a nonzero one, matching
+// the real ":15" cut measured on the owner's installation.
+func TestRecordOwnIdentityStripsDeviceSuffixBeforeMarkingOwner(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wm.db")
+	seedFakeDeviceWithJID(t, dbPath, "55500000099.0:15@s.whatsapp.net")
+	sm := state.NewManager(filepath.Join(t.TempDir(), "status.json"), 8)
+	st, err := store.Open(filepath.Join(t.TempDir(), "piumy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	a, err := New(context.Background(), Config{DBPath: dbPath, State: sm, Store: st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Stop)
+	if a.client.Store.ID == nil {
+		t.Fatal("test setup is wrong — seeded device should be paired (Store.ID != nil)")
+	}
+	if a.client.Store.ID.Device == 0 {
+		t.Fatal("test setup is wrong — want a NONZERO device (the real cut was :15), got 0 — this would not reproduce the bug")
+	}
+
+	a.recordOwnIdentity()
+
+	if _, ok, err := st.GetChat("55500000099:15@s.whatsapp.net"); err != nil || ok {
+		t.Errorf("GetChat(jid con sufijo) ok=%v err=%v, want ok=false — no debe quedar una fila bajo el jid crudo", ok, err)
+	}
+	c, ok, err := st.GetChat("55500000099@s.whatsapp.net")
+	if err != nil || !ok {
+		t.Fatalf("GetChat(jid limpio) ok=%v err=%v, want ok=true", ok, err)
+	}
+	if !c.IsBoss {
+		t.Error("IsBoss = false — la regresión que Citrino frenó: TouchChat normalizaba el chat pero MarkOwnerIfUntouched seguía viendo el jid crudo y no marcaba nada")
+	}
+	if got := sm.Snapshot().OwnJID; got != "55500000099@s.whatsapp.net" {
+		t.Errorf("state.Status.OwnJID = %q, want el jid limpio también ahí — recordOwnIdentity normaliza en el origen, antes de repartir el valor a state y al store", got)
 	}
 }

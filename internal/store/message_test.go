@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAddMessageDedup(t *testing.T) {
 	s := openTestStore(t)
@@ -26,6 +29,64 @@ func TestAddMessageDedup(t *testing.T) {
 	}
 	if msgs[0].Text != "hola" {
 		t.Errorf("got text=%q, want original %q (INSERT OR IGNORE keeps first insert)", msgs[0].Text, "hola")
+	}
+}
+
+// TestAddMessageStripsDeviceSuffixConsistently is T45's reproduction for
+// the real inbound path (ct-2026-08-10-1424): an incoming message whose
+// event carried a device-qualified JID must land under the CLEAN jid in
+// BOTH chats and messages — not just chats (TouchChat alone) — or the two
+// tables desync and PendingDedicated's JOIN never matches this message.
+func TestAddMessageStripsDeviceSuffixConsistently(t *testing.T) {
+	s := openTestStore(t)
+	raw := "55500000092:3@s.whatsapp.net"
+	clean := "55500000092@s.whatsapp.net"
+	// Recent, not TS:100 — SetActive below marks old messages handled on
+	// activation (S3's own anti-avalanche sweep), which would hide this
+	// message from PendingDedicated for a reason unrelated to what this
+	// test checks.
+	now := time.Now().Unix()
+
+	if err := s.AddMessage(Message{ChatJID: raw, ID: "m1", FromMe: false, Text: "hola", TS: now}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	if _, ok, err := s.GetChat(raw); err != nil || ok {
+		t.Errorf("GetChat(jid con sufijo) ok=%v err=%v, want ok=false", ok, err)
+	}
+	if _, ok, err := s.GetChat(clean); err != nil || !ok {
+		t.Fatalf("GetChat(jid limpio) ok=%v err=%v, want ok=true", ok, err)
+	}
+
+	msgsRaw, err := s.GetMessages(raw, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgsRaw) != 0 {
+		t.Errorf("GetMessages(jid con sufijo) = %d, want 0 — el mensaje no debe quedar bajo el jid crudo", len(msgsRaw))
+	}
+	msgsClean, err := s.GetMessages(clean, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgsClean) != 1 {
+		t.Fatalf("GetMessages(jid limpio) = %d, want 1", len(msgsClean))
+	}
+
+	// PendingDedicated JOINs chats ON messages.chat_jid — a real proof the
+	// two tables agree, not just that both happen to read back clean.
+	if err := s.SetMode(clean, "dedicated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetActive(clean, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.PendingDedicated(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ChatJID != clean {
+		t.Errorf("PendingDedicated = %v, want exactamente un mensaje con chat_jid=%q — chats.jid y messages.chat_jid deben coincidir para el JOIN", pending, clean)
 	}
 }
 
