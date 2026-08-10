@@ -10,6 +10,25 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.18 — 2026-08-10
+
+### Added
+- **El gateway ahora deja rastro de lo que hace** (T53, ct-2026-08-10-1849).
+  El binario se compila sin consola y el instalador lo lanza directo, así que
+  todo lo que registraba —"sin antena", "canal caído", "reintento diferido",
+  "despacho OK"— se evaporaba: esas líneas existían en el código y no había
+  forma de leerlas nunca. Ahora se escriben en `logs/piumy.log`, junto a la
+  instalación, con rotación por tamaño (5 MB, 3 archivos viejos) para que no
+  crezca sin techo. Sin interruptor: si hubiera que encenderlo, nadie lo
+  tendría encendido justo cuando pasa el problema.
+
+  Va en `logs/` y **no** junto a la base de datos y las claves, a propósito:
+  este archivo existe para pedírselo a alguien cuando algo no le llega, y la
+  forma natural de mandarlo es comprimir la carpeta que lo contiene. No
+  contiene texto de conversaciones — solo identificadores y estados.
+
+---
+
 ## 0.1.17 — 2026-08-10
 
 ### Fixed

@@ -20,6 +20,7 @@ import (
 	"piumy-gateway/internal/corepipeline"
 	"piumy-gateway/internal/eventbus"
 	"piumy-gateway/internal/governor"
+	"piumy-gateway/internal/gwlog"
 	"piumy-gateway/internal/mcpguard"
 	"piumy-gateway/internal/mcpserver"
 	"piumy-gateway/internal/restapi"
@@ -115,6 +116,21 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	// T53 (ct-2026-08-10-1849): el binario se compila -H=windowsgui (sin
+	// consola) y el instalador lo lanza directo — sin esto, todo lo que
+	// log.Printf escribe a partir de acá se evapora. Va lo antes posible,
+	// apenas cfg.StatusPath existe.
+	//
+	// En "logs/", hermano de secrets/ y NO adentro (Citrino, antes de
+	// publicar): este archivo existe para pedírselo a un usuario cuando algo
+	// no le llega. La forma natural de mandarlo es comprimir la carpeta que
+	// lo contiene — y secrets/ tiene PIUMY_MCP_KEY, PIUMY_REST_KEY y la
+	// sesión de WhatsApp. Un log que se pide es un log que sale de la
+	// máquina: no puede vivir junto a las credenciales.
+	if err := gwlog.Setup(filepath.Join(filepath.Dir(filepath.Dir(cfg.StatusPath)), "logs")); err != nil {
+		log.Printf("gwlog: no se pudo abrir el archivo de log: %v", err)
 	}
 
 	s, err := store.Open(cfg.DBPath)

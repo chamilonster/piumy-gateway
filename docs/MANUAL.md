@@ -1154,6 +1154,45 @@ máquina necesita leer para saber cómo hablarle al gateway, sin parsear el
 
 ---
 
+## gwlog — `internal/gwlog`
+
+Rol: redirige la salida del paquete estándar `log` a un archivo rotado por
+tamaño, junto a `piumy.db`/`router.json`/`status.json`. El binario se
+compila `-H=windowsgui` (sin consola) y el instalador lo lanza directo — sin
+esto, todo lo que `log.Printf` escribe se evapora (T53, ct-2026-08-10-1849).
+No cambia qué se loguea, solo dónde aterriza lo que ya existía.
+
+- `Setup(dir string) error` — crea `dir` si no existe, abre (o continúa)
+  `dir/piumy.log` en modo append y hace `log.SetOutput(...)`. Falla no-fatal:
+  el gateway sigue arrancando aunque no pueda abrir el archivo (mismo
+  criterio que `agentconnect.Write`).
+- Rotación propia (`rotatingWriter`, no exportado), sin dependencia nueva —
+  `lumberjack` no estaba en `go.mod` y agregar una dependencia pide OK
+  explícito (constitución §6); la rotación por tamaño son ~30 líneas.
+  `maxSize=5MB`, `maxBackups=3` (hardcode — nadie pidió que fuera
+  configurable): al cruzar `maxSize`, el archivo actual pasa a `.1`
+  (corriendo `.1→.2→.3`, lo que cae en `.4` se borra) y se abre uno nuevo.
+  Verificado forzando el tamaño en el test (`gwlog_test.go`), no razonando
+  sobre el código.
+- Enganchado en `main.go` justo después de `config.Load()`:
+  `gwlog.Setup(filepath.Dir(cfg.StatusPath))` — mismo data dir que
+  `agentconnect.Write` ya deriva (`secrets/` en la instalación real). Va lo
+  antes posible: solo las 1-2 líneas de `ApplyFileDefaults`/`config.Load` en
+  sí (que fallan fatal si algo anda tan mal) quedan fuera del archivo.
+- El archivo **no contiene texto de conversaciones** — verificado corriendo
+  el binario real contra un data dir sintético (sin sesión de WhatsApp,
+  cero contactos reales) y leyendo `secrets/piumy.log` resultante: solo
+  líneas de arranque (`store`, `whatsmeow`, `capipush`, `sessionbackup`,
+  `mcpserver`), sin cuerpo de mensaje. Las líneas existentes de
+  `capipush`/`whatsmeow` cerca del despacho ya solo loguean IDs, JIDs y
+  nombres de campo, nunca el texto — sin cambios de este contrato (fuera de
+  alcance: no se agregó logging nuevo).
+- Reiniciar no borra el historial — `os.O_APPEND`, confirmado con el
+  binario real: un segundo arranque contra el mismo `dir` agrega líneas
+  nuevas al final, las del primer arranque siguen ahí.
+
+---
+
 ## sysinfo — `internal/sysinfo`
 
 Rol: CPU/RAM desde `/proc` (Linux-only, degrada a `ok=false` en cualquier otra plataforma).
