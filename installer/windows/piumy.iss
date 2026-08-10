@@ -566,7 +566,17 @@ begin
       Break;
     end;
   end;
-  if (closeIdx < 1) or (Copy(TrimStr(ExistingLines[closeIdx]), 1, 1) <> '}') then
+  { closeIdx < 2, no < 1 (R10, hallazgo de Peridot): con closeIdx = 1 el
+    archivo es solo la línea de apertura y la de cierre, sin un solo par de
+    clave/valor. La reconstrucción de abajo le agrega una coma a la línea
+    anterior al cierre — que en ese caso es la apertura misma — y produce
+    JSON inválido. Hoy no es alcanzable porque FinalizeKeys ya abortó si
+    faltan las 3 claves base, pero eso es una dependencia implícita entre
+    dos hooks: el día que alguien reordene, se rompe en silencio. Un guard
+    no debe apoyarse en lo que hizo otro paso.
+    Ojo al editar este comentario: una llave de cierre suelta acá adentro
+    lo termina antes de tiempo y rompe la compilación del script. }
+  if (closeIdx < 2) or (Copy(TrimStr(ExistingLines[closeIdx]), 1, 1) <> '}') then
   begin
     { Formato irreconocible — no debería pasar nunca (ResolveKeys ya
       validó que las 3 claves base se pudieron leer de este mismo
@@ -1107,7 +1117,7 @@ begin
   if not Exec(ExpandConstant('{app}\{#MyAppExeName}'), '', ExpandConstant('{app}'),
      SW_HIDE, ewNoWait, ResultCode) then
   begin
-    Log('Piumy: no se pudo arrancar Piumy.exe automáticamente tras instalar — probablemente un antivirus o SmartScreen bloqueando el ejecutable. Las claves ya quedaron guardadas en run-piumy.bat; abra la app desde el acceso directo cuando pueda.');
+    Log('Piumy: no se pudo arrancar Piumy.exe automáticamente tras instalar — probablemente un antivirus o SmartScreen bloqueando el ejecutable. La configuración y las claves ya quedaron guardadas en piumy-config.json; abra la app desde el acceso directo cuando pueda.');
     if not WizardSilent then
       MsgBox('Piumy se instaló, pero no pude arrancarlo automáticamente. Ábralo desde el acceso directo.', mbError, MB_OK);
   end;

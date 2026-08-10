@@ -4951,7 +4951,10 @@ es un paso aparte, conjunto con el boss (no en `main.go`).
   `config.ApplyFileDefaults` (T11, ct-2026-08-05-1214 — rellena los
   `PIUMY_*` que falten desde `piumy-config.json`/migración de un
   `run-piumy.bat` viejo, ANTES de leer el entorno; ver la sección `config`
-  arriba) → `config.Load` → `store.Open` → `router.NewManager`
+  arriba) → `config.Load` → `gwlog.Setup` → **`acquireSingleInstance`** (T59,
+  ct-2026-08-10-2116 — ver el bullet propio abajo; si devuelve `false`,
+  `main` corta acá con un `return`, nada de lo que sigue se construye) →
+  `store.Open` → `router.NewManager`
   → `governor.NewLimiter+SetDailyMax` → `state.NewManager` →
   **`restoreKillSwitch`** (T19, ct-2026-08-05-1249 — ver el bullet propio
   abajo) → `agentconnect.Write` (T1 ct-2026-08-05-015542: escribe `agent-connect.json`
@@ -5086,6 +5089,52 @@ es un paso aparte, conjunto con el boss (no en `main.go`).
     aborta (exit code 1), binario intacto.
   - `appmutex_other.go` (`//go:build !windows`): no-op — el chequeo es
     Windows-only (el instalador también lo es).
+- **`acquireSingleInstance() bool`** (T59, ct-2026-08-10-2116) — el mutex
+  REAL de instancia única, deliberadamente SEPARADO de `acquireAppMutex`
+  arriba: aquel es best-effort para que el instalador detecte a Piumy
+  corriendo (nunca frena nada); este tiene que ser autoritativo, porque es
+  lo único que evita que dos procesos vivos peleen por la misma sesión de
+  WhatsApp (`whatsmeow.db`) — pasó de verdad, medido con PIDs, y una vez
+  terminó con WhatsApp desconectado. Mezclar los dos mutex en uno solo
+  hubiera acoplado dos concerns con requisitos opuestos (uno nunca debe
+  frenar, el otro SIEMPRE debe frenar al duplicado).
+  - `singleinstance_windows.go` (`//go:build windows`): mismo `kernel32`/
+    `createMutexW` que `appmutex_windows.go` ya resuelve (reusado, no
+    re-declarado), pero mutex propio `singleInstanceMutexName =
+    "PiumyGatewayRuntimeInstanceMutex"` con `bInitialOwner=1`. Devuelve
+    `false` solo si `GetLastError() == ERROR_ALREADY_EXISTS` tras un handle
+    válido — cualquier otra falla (no se pudo armar el nombre, `CreateMutexW`
+    devolvió handle 0) hace fail-OPEN (`true`, "somos la única instancia"):
+    negarse a arrancar por un problema ajeno al mutex sería el mismo "peor
+    que el problema" que el contrato pide evitar, solo que por otra puerta.
+    **Por qué un mutex con nombre y no un lock file/PID file** (como
+    `internal/sessionbackup/lock.go`, que sí existe en el repo para otro
+    caso — el restore CLI): un mutex con nombre del kernel de Windows lo
+    libera el sistema operativo solo, al instante en que el proceso muere,
+    sea como sea que haya muerto (salida limpia, `TerminateProcess`/
+    `taskkill /F`, corte de luz) — cero estado en disco, cero juicio de
+    "¿esto está viejo o no?" que un PID file sí obliga a hacer (y que un PID
+    reciclado por el SO podría hacer fallar mal). Exactamente el mecanismo
+    que hace posible el criterio más duro del contrato sin lógica de
+    staleness alguna.
+  - `singleinstance_other.go` (`//go:build !windows`): no-op, `true` fijo —
+    misma razón que `appmutex_other.go` (bandeja/instalador Windows-only).
+  - `main.go`: el chequeo va DESPUÉS de `gwlog.Setup` (a propósito — el
+    motivo de salida tiene que quedar en `logs/piumy.log`, no evaporarse
+    como el resto de `log.Printf` en el binario `-H=windowsgui`) y ANTES de
+    `store.Open`/`whatsmeow.New` — si es la segunda instancia, un `return`
+    liso sale sin haber tocado el store ni la sesión de WhatsApp en
+    absoluto (ningún defer pendiente todavía salvo `stop()`, inocuo).
+    Verificado matando el proceso de verdad (no razonando sobre el
+    código), instalación descartable: lanzar dos veces deja una corriendo
+    y la segunda sale sola con el motivo en el log (exit code 0, cero
+    líneas de `store`/`whatsmeow` de su parte); matar la primera a lo
+    bruto (`Process.Kill()`, TerminateProcess real) y relanzar arranca
+    normal (log "up" + REST responde 200) sin ningún estado colgado;
+    repetido una vez más tras el kill para confirmar que el ciclo
+    kill+relanzamiento no deja el mutex en un estado raro; `piumy.db` y
+    `whatsmeow.db` pasan `PRAGMA integrity_check` limpio después de toda
+    la secuencia.
 - **Histórico, ya no cableado desde T5** (ver la nota en `autoreply`):
   `autoreply.Worker.Policy` es `func() string`, no un string fijo — se
   cableaba `func() string { return autoreply.PolicyText(cfg.PolicyPath) }`

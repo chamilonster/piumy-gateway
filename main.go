@@ -133,6 +133,20 @@ func main() {
 		log.Printf("gwlog: no se pudo abrir el archivo de log: %v", err)
 	}
 
+	// T59 (ct-2026-08-10-2116): dos Piumy corriendo a la vez pisan la misma
+	// sesión de WhatsApp (whatsmeow.db) — pasó de verdad, dos veces el mismo
+	// día, una terminó con WhatsApp desconectado. Va DESPUÉS de gwlog.Setup
+	// (a propósito: el motivo de salida tiene que quedar en el log, no
+	// evaporarse como el resto de log.Printf en el binario -H=windowsgui) y
+	// ANTES de tocar el store o whatsmeow — si es la segunda instancia, sale
+	// sin haber abierto ni tocado la sesión en absoluto. Distinto del mutex
+	// de acquireAppMutex de arriba (ver singleinstance_windows.go): ese es
+	// best-effort para el instalador, este es autoritativo.
+	if !acquireSingleInstance() {
+		log.Println("piumy-gateway: ya hay una instancia corriendo — esta instancia sale ahora, sin tocar la sesión de WhatsApp")
+		return
+	}
+
 	s, err := store.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("store: %v", err)

@@ -10,6 +10,25 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.21 — 2026-08-10
+
+### Fixed
+- **Ahora solo puede correr una instancia de Piumy a la vez** (T59,
+  ct-2026-08-10-2116). Nada impedía lanzarlo dos veces sobre la misma sesión
+  de WhatsApp — pasó de verdad, dos veces el mismo día, y una terminó con
+  WhatsApp desconectado. Ahora la segunda instancia sale sola apenas arranca
+  (sin llegar a tocar la sesión) y deja constancia en el log de por qué. Sin
+  diálogos — esto se lanza desde la bandeja y desde el instalador, no
+  siempre hay alguien mirando. Sobrevive a un cierre sucio (proceso matado,
+  corte de luz): verificado matando el proceso de verdad, no solo leyendo el
+  código — el mecanismo es un mutex del sistema operativo, que el propio
+  Windows libera apenas el proceso muere, sea como sea que haya muerto, así
+  que nunca queda una instancia "fantasma" bloqueando el próximo arranque.
+  Separado del mutex que ya existía para el instalador (no se tocó — sigue
+  best-effort, sigue funcionando igual).
+
+---
+
 ## 0.1.20 — 2026-08-10
 
 ### Fixed
