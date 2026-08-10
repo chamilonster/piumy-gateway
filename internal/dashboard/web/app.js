@@ -1264,6 +1264,75 @@
     return td;
   }
 
+  // agentExclusiveID: mismo parseo que store.AgentExclusiveID (agents.go)
+  // — "agent_exclusive:<id>" → <id>, o "" si el chat no está asignado
+  // (status de cualquier otro valor: new/whitelist/blacklist/ignored).
+  function agentExclusiveID(status) {
+    var prefix = "agent_exclusive:";
+    if ((status || "").indexOf(prefix) !== 0) return "";
+    return status.slice(prefix.length);
+  }
+
+  // buildAgentAssignControl (T56, ct-2026-08-10-201641) — el control que
+  // faltaba: desde CADA chat, elegir qué agente lo atiende. El buscador que
+  // ya vive en cada tarjeta de agente (renderAssignSearch, arriba) hace el
+  // camino inverso — este es el que el dueño pidió y no existía: parado en
+  // el chat, no en el agente. Mismo endpoint, mismo contrato de datos (el
+  // propio POST /api/admin/agent-assign no cambia): agent_id vacío limpia
+  // la asignación (el chat cae al principal por default de dispatch); el
+  // principal nunca aparece como opción — el propio backend lo rechaza,
+  // ya es el fallback de todo lo no-asignado, ofrecerlo sería redundante.
+  // Sin recargar (vara del dueño, ya dicha más de una vez): post + loadChats()
+  // en el .then, mismo patrón que buildLevelControl ya usa para Nivel —
+  // loadChats() vuelve a traer /api/chats entero, así que si asignar
+  // cambiara algo más del chat (status, y lo que dependa de él), se refleja
+  // solo, sin código extra acá.
+  function buildAgentAssignControl(c) {
+    var wrap = document.createElement("div");
+    wrap.className = "agentassigncell";
+    var currentID = agentExclusiveID(c.status);
+
+    var sel = document.createElement("select");
+    sel.className = "levelselect";
+    var optNone = document.createElement("option");
+    optNone.value = "";
+    optNone.textContent = "Sin asignar";
+    sel.appendChild(optNone);
+    state.agents.forEach(function (a) {
+      if (a.role === "principal") return;
+      var opt = document.createElement("option");
+      opt.value = a.agent_id;
+      opt.textContent = a.name || a.agent_id;
+      if (a.agent_id === currentID) opt.selected = true;
+      sel.appendChild(opt);
+    });
+
+    var result = document.createElement("span");
+    result.className = "agentassignresult";
+
+    sel.onchange = function () {
+      result.textContent = "Guardando…";
+      post("/api/admin/agent-assign", { chat_id: c.jid, agent_id: sel.value }).then(function () {
+        result.textContent = "";
+        loadChats();
+      }).catch(function (e) {
+        result.textContent = "Error: " + e.message;
+        sel.value = currentID; // revertir la selección visual — el backend no aplicó el cambio
+      });
+    };
+
+    wrap.appendChild(sel);
+    wrap.appendChild(result);
+    return wrap;
+  }
+
+  function renderAgentAssignCell(c) {
+    var td = document.createElement("td");
+    td.setAttribute("data-label", "Agente");
+    td.appendChild(buildAgentAssignControl(c));
+    return td;
+  }
+
   // RULES_SOURCE_LABEL (ct-2026-07-31, "las reglas por defecto no se ven")
   // — traduce el rules_source que calcula read.go (rulesSourceFor) a texto
   // para el usuario. "particular" no aparece acá: buildRulesControl solo
@@ -1362,6 +1431,7 @@
     tr.appendChild(tdName);
 
     tr.appendChild(renderLevelCell(c));
+    tr.appendChild(renderAgentAssignCell(c));
 
     var tdRules = document.createElement("td");
     tdRules.setAttribute("data-label", "Reglas");

@@ -4895,6 +4895,30 @@ del dueño desde la LAN, sin agente de por medio. Grupo/perfil NO están acá
     sub-cambio aparte. Recarga la lista completa tras cada asignar/quitar
     en vez de mantener estado propio — la lista es chica (asignación
     manual, no todos los chats), así queda siempre fiel al backend.
+- **T56 (ct-2026-08-10-201641) — el camino inverso, parado en el chat:**
+  M3 arriba solo daba de alta la asignación DESDE la tarjeta del agente
+  (`renderAssignedNumbers`); la tabla de Chats nunca llamaba
+  `/api/admin/agent-assign` — cero referencias en `app.js`/`index.html`.
+  Mismo endpoint, mismo contrato, sin tocar backend — solo la pantalla que
+  faltaba:
+  - `index.html`: columna "Agente" nueva en `#chattable`, entre "Nivel" y
+    "Reglas".
+  - `app.js`: `agentExclusiveID(status)` — parseo espejo de
+    `store.AgentExclusiveID` (el prefijo `agent_exclusive:`, sin ida y
+    vuelta al backend para saber si un chat ya está asignado);
+    `buildAgentAssignControl(c)`/`renderAgentAssignCell(c)` — `<select>`
+    con "Sin asignar" + todos los `state.agents` salvo el principal
+    (mismo filtro que ya aplica el backend, así la opción imposible ni
+    aparece); `onchange` hace `post` + `loadChats()` en el `.then`, mismo
+    patrón sin-recargar que `buildLevelControl` ya usa para Nivel — vara
+    explícita del dueño, dicha más de una vez. Verificado con navegador
+    real (no por consola): asignar y desasignar reflejan en la tabla sin
+    reload, confirmado también contra `chats.status` en SQLite.
+  - Alcance recortado a propósito: avisar en esta misma pantalla si el
+    número está en la whitelist del router (`handleChats`/`read.go` no
+    expone hoy ningún campo `allowed`/whitelist — haría falta sumarlo)
+    quedó FUERA — split a un contrato aparte, autorizado de antemano por
+    Citrino en el dispatch de T56 si agrandaba demasiado el trabajo.
 
 ---
 

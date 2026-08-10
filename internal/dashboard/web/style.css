@@ -342,6 +342,12 @@ td.list-sub::before { content: none; } /* sin data-label — no heredar el ::bef
 .smbtn:hover { color: var(--phos); border-color: var(--phos); }
 .smbtn.active { background: var(--green); color: #04140b; border-color: var(--green); }
 
+/* ── celda "Agente" (T56, ct-2026-08-10-201641) — mismo look que
+   .levelcell/.levelselect, reusado tal cual (el <select> ya tiene el
+   estilo correcto, no hace falta una clase nueva para eso). */
+.agentassigncell { display: flex; align-items: center; gap: 8px; }
+.agentassignresult { font-size: 11px; color: var(--dim); }
+
 .rulescell { display: inline-flex; align-items: center; }
 .rulespreview {
   font-size: 11px; color: var(--dim); max-width: 150px; white-space: nowrap; overflow: hidden;

@@ -86,6 +86,10 @@ Todo lo de arriba (el ritual, el turno, el canal) es para cuando **te llega un d
 
 ## Lo que SÍ tocas
 
+**Antes de la tabla, lo que más confunde al empezar: casi nada de esto funciona sin un despacho activo.** No es solo enviar — `get_chat`, `get_messages`, `get_media` y `resolve_chat` también te van a rechazar con *"no active dispatch for this terminal (default DENY)"* si no estás atendiendo uno. No es que te falten permisos ni que tu identidad esté mal: es que **el punto de partida de todo es un despacho**, y un despacho nace de un mensaje real que alguien te escribió.
+
+Consecuencia práctica, y no es obvia: **estando conectado, registrado y sin nada asignado, no podés hacer casi nada — y eso es lo esperado, no una falla.** Si te pasa, no busques qué configuraste mal: esperá a que llegue trabajo.
+
 | Para | Herramientas |
 |---|---|
 | Entender el chat | `get_chat` · `get_messages` · `get_media` · `get_media_full` · `resolve_chat` |
@@ -220,7 +224,10 @@ En todos, `nonce` es el del header del despacho que estás atendiendo, y `chat_i
 
 - `send_message` y `draft` **no** toman `chat_id`/`text`. Toman `to` (el JID completo, como viene de `get_chat`/`resolve_chat` — nunca un teléfono pelado), `message`, `model` (quién está contestando, obligatorio) y `policy_version` (de `get_decision_policy`; el agente principal puede omitirlo, los demás no).
 - `claim_chat` y `release_chat` también piden `model` — la misma identidad que le pasás a `send_message`.
-- `get_media` lista los medios recientes del chat (`limit`); el que baja UNO concreto es `get_media_full(chat_id, msg_id)`.
+- `get_media` lista los medios recientes del chat (`limit`) y te da acceso a la
+  versión **liviana** de cada uno; `get_media_full(chat_id, msg_id)` trae el
+  **original completo** de uno solo, y cuesta más. Pedí el original solo cuando
+  de verdad lo necesites — leer letra chica en una foto, por ejemplo.
 
 ## 1 · Lo normal: te despachan y contestas
 
@@ -275,12 +282,14 @@ Si te olvidas de la última, tu **terminal entero** queda bloqueado 15 minutos. 
 
 ```
 get_instructions(nonce) → unlock(token)
-get_media(chat_id, limit)         → LISTA los medios recientes del chat: qué hay y con qué id
-get_media_full(chat_id, msg_id)   → baja UNO, el contenido completo
+get_media(chat_id, limit)         → los medios recientes del chat, en versión liviana
+get_media_full(chat_id, msg_id)   → el ORIGINAL completo de uno solo (cuesta más)
 remember|skip → send_message | draft | silent_act
 ```
 
-Ojo con la diferencia, porque los nombres engañan: `get_media` **no** baja un medio, lista los últimos. De ahí sacás el `msg_id` que le pasás a `get_media_full`.
+La diferencia no es "lista contra descarga" — es **calidad y costo**. `get_media` te da los últimos medios en una versión reducida, suficiente para saber qué te mandaron; de ahí sacás el `msg_id`. `get_media_full` trae el original sin comprimir de UNO, y se cobra como uso de imagen.
+
+Pedí el original solo cuando la versión liviana no alcanza — letra chica en una foto, un detalle que no se distingue. Si ya entendiste qué te mandaron, no lo pidas.
 
 Pide el completo cuando vas a usarlo, no "para ver". Y si no entiendes qué te mandaron, **pregúntale a quien te escribe** antes de suponer: una captura de pantalla puede ser un reclamo de que tu mensaje anterior se vio mal, no un documento.
 

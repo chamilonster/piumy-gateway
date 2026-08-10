@@ -74,6 +74,57 @@ func (s *Store) PendingChats(limit int, now int64) ([]Pending, error) {
 	return out, rows.Err()
 }
 
+// PendingChatsDispatch is the dispatch-aligned per-chat view for get_pending
+// (T55, ct-2026-08-10-2007): same shape as PendingChats (one entry per chat,
+// oldest-first) but filtered identically to PendingDedicated — handled=0,
+// mode IN ('dedicated','auto'), and the same is_boss/active/status gate.
+// PendingChats is intentionally broader (autoreply uses it as a raw feed and
+// applies its own eligible() filter); get_pending must show only what the
+// gateway will actually dispatch, so it calls this instead.
+func (s *Store) PendingChatsDispatch(limit int, now int64) ([]Pending, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.Query(`
+		SELECT m.chat_jid, COALESCE(c.name,''), c.mode, c.status, c.active, m.ts, COALESCE(m.text,''),
+			COALESCE(c.claimed_by,''), c.claimed_until
+		FROM messages m
+		JOIN chats c ON c.jid = m.chat_jid
+		WHERE m.from_me = 0 AND m.handled = 0
+		AND c.mode IN ('dedicated', 'auto')
+		AND (c.is_boss = 1 OR (c.active = 1 AND c.status != 'ignored'))
+		AND m.rowid = (
+			SELECT m2.rowid FROM messages m2
+			WHERE m2.chat_jid = m.chat_jid AND m2.from_me = 0 AND m2.handled = 0
+			ORDER BY m2.ts DESC, m2.rowid DESC LIMIT 1
+		)
+		ORDER BY m.ts ASC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Pending{}
+	for rows.Next() {
+		var p Pending
+		var active int
+		if err := rows.Scan(&p.JID, &p.Name, &p.Mode, &p.Status, &active, &p.LastTS, &p.Preview,
+			&p.ClaimedBy, &p.ClaimedUntil); err != nil {
+			return nil, err
+		}
+		p.Active = active != 0
+		if len(p.Preview) > 80 {
+			p.Preview = p.Preview[:80] + "…"
+		}
+		p.AgeSec = now - p.LastTS
+		p.Origin = "inbound_spoke"
+		p.ClaimedBy, p.ClaimedUntil = effectiveClaim(p.ClaimedBy, p.ClaimedUntil, now)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // PendingDedicated returns incoming messages not yet handled, from any chat
 // the owner hasn't explicitly silenced (T5, ct-2026-08-05-0311, boss
 // verbatim: "todos los mensajes automaticos y por confirmacion deben

@@ -10,6 +10,35 @@ Se actualiza en cada deploy/build junto con el relanzamiento del gateway.
 
 ---
 
+## 0.1.20 — 2026-08-10
+
+### Fixed
+- **El manual del operador no avisaba lo que más confunde al empezar** (T58,
+  hallazgo de Bernstein ejecutando los flujos). Casi ninguna herramienta
+  funciona sin un despacho activo — ni siquiera las de solo lectura, como
+  consultar un chat o sus mensajes. Ese aviso existía, pero en el manual de
+  conexión, que no es el que lee un operador. Un agente recién conectado veía
+  todo rechazado y buscaba qué había configurado mal, cuando lo esperable era
+  esperar trabajo.
+- **Dos descripciones del propio código se contradecían sobre los medios.** Una
+  presentaba `get_media` como un listado; la otra decía que sirve una copia de
+  baja calidad. Ninguna de las dos lo contaba bien: devuelve los medios
+  recientes **en versión liviana**, y `get_media_full` trae el original de uno
+  solo, que se cobra aparte. La diferencia no es listar contra descargar, es
+  calidad y costo. Corregidas la descripción de la herramienta y el manual.
+### Added
+- **El tablero ahora puede asignar un chat a un agente** (T56,
+  ct-2026-08-10-201641). El endpoint `/api/admin/agent-assign` ya existía y
+  funcionaba, pero la pantalla nunca lo llamaba — el dueño no tenía forma de
+  repartir qué números atiende cada agente desde el tablero, solo por MCP.
+  Ahora la tabla de chats tiene una columna "Agente" con un selector: elegir
+  un agente asigna el chat en exclusiva; "Sin asignar" limpia la asignación
+  y el chat vuelve al principal. Sin recargar la página — mismo patrón que
+  ya usa el selector de Nivel. La lista de agentes sale de la misma fuente
+  que ya alimenta el resto del tablero.
+
+---
+
 ## 0.1.19 — 2026-08-10
 
 ### Fixed

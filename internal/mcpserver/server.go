@@ -774,7 +774,7 @@ func New(ctx context.Context, d Deps) *server.MCPServer {
 
 	// ── get_media ────────────────────────────────────────────────────────
 	s.AddTool(mcp.NewTool("get_media",
-		mcp.WithDescription("Images/videos/stickers downloaded from a chat (file paths on disk, mime, size)."),
+		mcp.WithDescription("Recent images/videos/stickers from a chat, as a LOW-QUALITY copy (path on disk, mime, size) — enough to tell what was sent, and cheap. Use get_media_full for the uncompressed original of one message, which costs more."),
 		mcp.WithString("chat_id", mcp.Required()),
 		mcp.WithNumber("limit", mcp.DefaultNumber(20))),
 		func(ctx context.Context, r mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -813,11 +813,11 @@ func New(ctx context.Context, d Deps) *server.MCPServer {
 
 	// ── get_pending ──────────────────────────────────────────────────────
 	s.AddTool(mcp.NewTool("get_pending",
-		mcp.WithDescription("Chats waiting for a reply — the contact has the last word (last_speaker=\"them\"). These are candidates, NOT a to-do list: you are not obligated to reply to all of them. Judge each by date and relevance; you must NOT always have the last word — replying to every single one is a mistake. When in doubt, escalate (escalate) or ask the owner instead of guessing. If you're one of several connected agents, consider claim_chat before working one so another agent skips it — claimed_by/claimed_until here (empty/0 if unclaimed or expired) show what's already spoken for."),
+		mcp.WithDescription("Chats in the dispatch queue — unhandled inbound messages the gateway will actually route to a connected agent (mode=dedicated/auto, chat active and not ignored). These are candidates, NOT a to-do list: you are not obligated to reply to all of them. Judge each by date and relevance; you must NOT always have the last word — replying to every single one is a mistake. When in doubt, escalate (escalate) or ask the owner instead of guessing. If you're one of several connected agents, consider claim_chat before working one so another agent skips it — claimed_by/claimed_until here (empty/0 if unclaimed or expired) show what's already spoken for."),
 		mcp.WithNumber("limit", mcp.DefaultNumber(20))),
 		func(ctx context.Context, r mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			tracker.seen(ctx)
-			pending, err := d.Store.PendingChats(int(r.GetFloat("limit", 20)), time.Now().Unix())
+			pending, err := d.Store.PendingChatsDispatch(int(r.GetFloat("limit", 20)), time.Now().Unix())
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}

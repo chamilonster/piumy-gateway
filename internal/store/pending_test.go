@@ -314,6 +314,174 @@ func TestPendingDedicatedRespectsConfigLevel(t *testing.T) {
 	}
 }
 
+// TestPendingChatsDispatchExcludesHandled is T55 (ct-2026-08-10-2007): a chat
+// whose last inbound message is already marked handled still appears in
+// PendingChats (the contact has the last word), but must NOT appear in
+// PendingChatsDispatch — the gateway has nothing left to dispatch from it.
+// This was the "chat stuck days" scenario: mark_handled (or a stuck outbox)
+// left handled=1 on the last inbound message, PendingChats kept showing it,
+// and nobody could understand why it never got dispatched.
+func TestPendingChatsDispatchExcludesHandled(t *testing.T) {
+	s := openTestStore(t)
+	jid := "555000001@s.whatsapp.net"
+
+	if err := s.SetMode(jid, "dedicated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetActive(jid, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddMessage(Message{ChatJID: jid, ID: "m1", FromMe: false, Text: "hola", TS: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkHandled(jid, "m1"); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := s.PendingChats(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("PendingChats = %d, want 1 (broad view still shows the chat)", len(raw))
+	}
+
+	dispatch, err := s.PendingChatsDispatch(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatch) != 0 {
+		t.Errorf("PendingChatsDispatch = %+v, want empty (handled=1, nothing left to dispatch)", dispatch)
+	}
+}
+
+// TestPendingChatsDispatchExcludesIgnored is T55: a chat with status='ignored'
+// appears in PendingChats but must be absent from PendingChatsDispatch —
+// matching PendingDedicated's own gate.
+func TestPendingChatsDispatchExcludesIgnored(t *testing.T) {
+	s := openTestStore(t)
+	jid := "555000002@s.whatsapp.net"
+
+	if err := s.SetMode(jid, "dedicated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetActive(jid, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStatus(jid, "ignored"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddMessage(Message{ChatJID: jid, ID: "m1", FromMe: false, Text: "hola", TS: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := s.PendingChats(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("PendingChats = %d, want 1", len(raw))
+	}
+
+	dispatch, err := s.PendingChatsDispatch(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatch) != 0 {
+		t.Errorf("PendingChatsDispatch = %+v, want empty (status=ignored)", dispatch)
+	}
+}
+
+// TestPendingChatsDispatchExcludesManualMode is T55: mode='manual' appears in
+// PendingChats but never dispatched — PendingChatsDispatch must exclude it.
+func TestPendingChatsDispatchExcludesManualMode(t *testing.T) {
+	s := openTestStore(t)
+	jid := "555000003@s.whatsapp.net"
+
+	if err := s.SetMode(jid, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetActive(jid, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddMessage(Message{ChatJID: jid, ID: "m1", FromMe: false, Text: "hola", TS: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := s.PendingChats(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("PendingChats = %d, want 1", len(raw))
+	}
+
+	dispatch, err := s.PendingChatsDispatch(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatch) != 0 {
+		t.Errorf("PendingChatsDispatch = %+v, want empty (mode=manual)", dispatch)
+	}
+}
+
+// TestPendingChatsDispatchExcludesInactive is T55: an inactive chat (active=0,
+// not is_boss) appears in PendingChats but not in PendingChatsDispatch.
+func TestPendingChatsDispatchExcludesInactive(t *testing.T) {
+	s := openTestStore(t)
+	jid := "555000004@s.whatsapp.net"
+
+	if err := s.SetMode(jid, "dedicated"); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately no SetActive — active stays false (schema default).
+	if err := s.AddMessage(Message{ChatJID: jid, ID: "m1", FromMe: false, Text: "hola", TS: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := s.PendingChats(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("PendingChats = %d, want 1", len(raw))
+	}
+
+	dispatch, err := s.PendingChatsDispatch(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatch) != 0 {
+		t.Errorf("PendingChatsDispatch = %+v, want empty (active=false, not is_boss)", dispatch)
+	}
+}
+
+// TestPendingChatsDispatchIncludesBossEvenInactive is T55: is_boss bypasses
+// the active/status gate in PendingChatsDispatch — mirroring PendingDedicated.
+func TestPendingChatsDispatchIncludesBossEvenInactive(t *testing.T) {
+	s := openTestStore(t)
+	jid := "555000005@s.whatsapp.net"
+
+	if err := s.SetMode(jid, "dedicated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetIsBoss(jid, true); err != nil {
+		t.Fatal(err)
+	}
+	// No SetActive — stays false.
+	if err := s.AddMessage(Message{ChatJID: jid, ID: "m1", FromMe: false, Text: "hola", TS: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatch, err := s.PendingChatsDispatch(10, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatch) != 1 {
+		t.Errorf("PendingChatsDispatch = %+v, want 1 (is_boss bypasses active gate)", dispatch)
+	}
+}
+
 // TestPendingDedicatedBossDispatchesEvenNeverActivated is the fix to
 // ct-2026-07-21-1853's own follow-up: ConfigLevel treats IsBoss as an
 // unconditional, first-priority case — a boss chat is "boss" level (must
